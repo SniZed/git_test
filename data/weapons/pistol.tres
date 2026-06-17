@@ -1,0 +1,21 @@
+[gd_resource type="Resource" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://resources/items/weapon_data.gd" id="1_wpn"]
+
+[resource]
+script = ExtResource("1_wpn")
+id = &"echo_pistol"
+display_name = "Echo Pistol"
+description = "Standard-issue sidearm. Reliable, low noise."
+rarity = 0
+base_value = 50
+weight = 1.5
+color = Color(0.8, 0.8, 0.85, 1)
+damage = 16.0
+fire_rate = 6.0
+projectile_speed = 760.0
+spread_degrees = 3.0
+mag_size = 14
+reload_time = 1.1
+noise_radius = 280.0
+projectile_color = Color(1, 0.9, 0.3, 1)

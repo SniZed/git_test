@@ -1,0 +1,13 @@
+[gd_resource type="Resource" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://resources/world/vault_data.gd" id="1_vault"]
+[ext_resource type="Resource" path="res://data/enemies/guard.tres" id="2_guard"]
+[ext_resource type="Resource" path="res://data/items/medkit.tres" id="3_medkit"]
+
+[resource]
+script = ExtResource("1_vault")
+id = &"industrial_01"
+display_name = "Industrial Vault 01"
+raid_time_seconds = 75.0
+enemy_pool = [ExtResource("2_guard")]
+loot_pool = [ExtResource("3_medkit")]

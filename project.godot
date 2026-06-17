@@ -1,0 +1,22 @@
+; Echo Vaults — Godot 4 project (Fas 1: Vertical Slice)
+; Engine configuration file.
+
+config_version=5
+
+[application]
+
+config/name="Echo Vaults"
+config/description="Top-down extraction roguelite-shooter — Fas 1 vertical slice."
+run/main_scene="res://scenes/boot/main.tscn"
+config/features=PackedStringArray("4.3", "Forward Plus")
+
+[autoload]
+
+EventBus="*res://autoloads/event_bus.gd"
+RNG="*res://scripts/core/rng.gd"
+GameManager="*res://autoloads/game_manager.gd"
+RunManager="*res://autoloads/run_manager.gd"
+
+[rendering]
+
+environment/defaults/default_clear_color=Color(0.08, 0.08, 0.11, 1)
