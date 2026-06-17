@@ -8,7 +8,7 @@ config_version=5
 config/name="Echo Vaults"
 config/description="Top-down extraction roguelite-shooter — Fas 1 vertical slice."
 run/main_scene="res://scenes/boot/main.tscn"
-config/features=PackedStringArray("4.3", "Forward Plus")
+config/features=PackedStringArray("4.2", "Forward Plus")
 
 [autoload]
 
