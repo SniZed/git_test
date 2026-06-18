@@ -27,12 +27,12 @@
 
 /* ---------- DATA (data-driven config; add content here, not in the logic) -- */
 const WEAPONS = {
-  pistol: { name: "Echo Pistol", damage: 16, fireRate: 6, projSpeed: 760,
-            spread: 3, mag: 14, reload: 1.1, noise: 280, projColor: "#ffe14d" }
+  pistol: { name: "Echo Pistol", damage: 16, fireRate: 6, projSpeed: 900,
+            spread: 1.5, mag: 14, reload: 1.1, noise: 280, projColor: "#ffe14d" }
 };
 const ENEMIES = {
-  guard: { name: "Vault Guard", maxHp: 45, speed: 95, damage: 9, attackRange: 340,
-           fireRate: 1.6, hearing: 280, sight: 380, color: "#d95252", lootChance: 0.5 }
+  guard: { name: "Vault Guard", maxHp: 28, speed: 130, damage: 9, attackRange: 340,
+           fireRate: 2.6, hearing: 300, sight: 420, color: "#d95252", lootChance: 0.5 }
 };
 const LOOT = { medkit: { name: "Medkit", color: "#4de372", value: 120 } };
 const VAULTS = {
@@ -58,7 +58,7 @@ const LOOT_SPAWNS = [
 ];
 const EXTRACTION = { x: 1240, y: 850, r: 55 };
 const PLAYER_SPAWN = { x: 120, y: 860 };
-const BULLET_R = 4;
+const BULLET_R = 5;
 
 /* ---------- CANVAS / DISPLAY ----------------------------------------------- */
 const canvas = document.getElementById("game");
@@ -297,7 +297,10 @@ function updatePlayer(dt) {
   if (p.dead) return;
   if (p.dodgeCd > 0) p.dodgeCd -= dt;
   computeCamera(p);
-  p.aim = getAim(p);
+  // Aim smoothing: steadier on touch (less twitchy), 1:1 on desktop mouse.
+  const desired = getAim(p);
+  const k = touch.aimUsed ? 0.22 : 1.0;
+  p.aim = norm(p.aim.x + (desired.x - p.aim.x) * k, p.aim.y + (desired.y - p.aim.y) * k);
   if (touch.aimUsed) { reticle.x = p.x + p.aim.x * 240; reticle.y = p.y + p.aim.y * 240; }
   else { reticle.x = view.camX + mouseScreen.x / view.scale; reticle.y = view.camY + mouseScreen.y / view.scale; }
 
