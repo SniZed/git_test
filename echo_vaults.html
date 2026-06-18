@@ -45,22 +45,32 @@ const VAULTS = {
 
 /* ---------- WORLD ---------------------------------------------------------- */
 const WORLD = { w: 1400, h: 1000 };
-const WALL_DATA = [
+// Static walls (always solid). The boss-room door is added per run at startGame.
+const STATIC_WALLS = [
+  // outer
   { x: 0, y: 0, w: 1400, h: 40 }, { x: 0, y: 960, w: 1400, h: 40 },
   { x: 0, y: 0, w: 40, h: 1000 }, { x: 1360, y: 0, w: 40, h: 1000 },
-  { x: 300, y: 250, w: 220, h: 40 }, { x: 850, y: 200, w: 40, h: 260 },
-  { x: 640, y: 480, w: 160, h: 120 }, { x: 300, y: 650, w: 40, h: 220 },
-  { x: 950, y: 680, w: 240, h: 40 }
+  // main-room cover
+  { x: 300, y: 250, w: 220, h: 40 }, { x: 820, y: 200, w: 40, h: 240 },
+  { x: 560, y: 520, w: 180, h: 40 }, { x: 300, y: 650, w: 40, h: 200 },
+  // boss-room divider (leaves a door gap at y 450..570)
+  { x: 1000, y: 80, w: 44, h: 370 }, { x: 1000, y: 570, w: 44, h: 350 },
+  // boss-room cover
+  { x: 1180, y: 320, w: 40, h: 180 }, { x: 1120, y: 700, w: 170, h: 40 }
 ];
-const ENEMY_SPAWNS = [
-  { x: 1000, y: 300 }, { x: 500, y: 200 }, { x: 1150, y: 750 }, { x: 800, y: 820 }
+const DOOR = { x: 1000, y: 450, w: 44, h: 120, isDoor: true };   // lockable gate
+let WALL_DATA = STATIC_WALLS.slice();                            // rebuilt each run (with/without the door)
+
+const ENEMY_SPAWNS = [   // main-room guards — clear them (or run out the timer) to open the door
+  { x: 760, y: 300 }, { x: 480, y: 200 }, { x: 820, y: 780 }, { x: 320, y: 320 }
 ];
-const BOSS_SPAWN = { x: 700, y: 250 };
-const LOOT_SPAWNS = [
-  { x: 250, y: 320 }, { x: 920, y: 250 }, { x: 1120, y: 520 },
-  { x: 450, y: 760 }, { x: 700, y: 640 }
+const BOSS_SPAWN = { x: 1200, y: 500 };
+const BOSSROOM_GUARDS = [ { x: 1110, y: 250 }, { x: 1270, y: 760 } ];
+const LOOT_SPAWNS = [     // main-room loot
+  { x: 250, y: 320 }, { x: 700, y: 250 }, { x: 450, y: 760 }, { x: 620, y: 600 }
 ];
-const EXTRACTION = { x: 1240, y: 850, r: 55 };
+const BOSSROOM_LOOT = [ { x: 1200, y: 300 }, { x: 1280, y: 560 } ];
+const EXTRACTION = { x: 140, y: 200, r: 55 };
 const PLAYER_SPAWN = { x: 120, y: 860 };
 const BULLET_R = 5;
 
@@ -173,17 +183,23 @@ canvas.addEventListener("touchend", onTouchEnd, { passive: false });
 canvas.addEventListener("touchcancel", onTouchEnd, { passive: false });
 
 /* ---------- GAME STATE ----------------------------------------------------- */
-const game = { state: "boot", run: null, player: null, enemies: [], bullets: [], pickups: [], noiseFlashes: [], sparks: [], damageFlash: 0 };
+const game = { state: "boot", run: null, player: null, enemies: [], bullets: [], pickups: [], noiseFlashes: [], sparks: [], damageFlash: 0, doorLocked: true, doorWall: null, announce: "", announceT: 0 };
 const reticle = { x: 0, y: 0 };   // where the crosshair is drawn (= where shots go)
 
 function startGame() {
   const vault = VAULTS.industrial;
+  WALL_DATA = STATIC_WALLS.map((w) => ({ ...w }));
+  const door = { ...DOOR }; WALL_DATA.push(door);
+  buildNav();
   game.run = { vault, timeLeft: vault.raidTime, loot: 0, alarm: false, extractT: 0, extractDone: false };
+  game.doorLocked = true; game.doorWall = door; game.announce = ""; game.announceT = 0;
   game.player = makePlayer();
   game.enemies = ENEMY_SPAWNS.map((s) => makeEnemy(ENEMIES[vault.enemy], s.x, s.y));
-  game.enemies.push(makeEnemy(BOSSES.warden, BOSS_SPAWN.x, BOSS_SPAWN.y));
+  for (const s of BOSSROOM_GUARDS) { const gd = makeEnemy(ENEMIES[vault.enemy], s.x, s.y); gd.bossRoom = true; game.enemies.push(gd); }
+  const bossE = makeEnemy(BOSSES.warden, BOSS_SPAWN.x, BOSS_SPAWN.y); bossE.bossRoom = true; game.enemies.push(bossE);
   game.bullets = [];
   game.pickups = LOOT_SPAWNS.map((s) => ({ x: s.x, y: s.y, item: LOOT[vault.loot] }));
+  for (const s of BOSSROOM_LOOT) game.pickups.push({ x: s.x, y: s.y, item: LOOT[vault.loot] });
   game.noiseFlashes = []; game.sparks = []; game.damageFlash = 0;
   game.state = "playing";
 }
@@ -195,7 +211,8 @@ function makePlayer() {
 }
 function makeEnemy(data, x, y) {
   return { x, y, r: data.radius || 13, data, hp: data.maxHp, state: "patrol", origin: { x, y }, target: { x, y },
-           wait: 0, lastKnown: { x, y }, searchT: 0, lostT: 0, fireCd: 0, hitFlash: 0, atk: 0, burst: 0, burstT: 0 };
+           wait: 0, lastKnown: { x, y }, searchT: 0, lostT: 0, fireCd: 0, hitFlash: 0, atk: 0, burst: 0, burstT: 0,
+           bossRoom: false, path: null, pathT: 0, pathIndex: 1, pathGoal: { x: 0, y: 0 } };
 }
 
 /* ---------- MATH / COLLISION ----------------------------------------------- */
@@ -253,11 +270,86 @@ function getAim(p) {
   return (a.x || a.y) ? a : p.aim;
 }
 
+/* ---------- NAVIGATION (grid A* so enemies route around walls) ------------- */
+const NAV = { cell: 40, cols: 0, rows: 0, blocked: null };
+const DIRS8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+function rectsOverlap(a, w) { return a.x < w.x + w.w && a.x + a.w > w.x && a.y < w.y + w.h && a.y + a.h > w.y; }
+function buildNav() {
+  NAV.cols = Math.ceil(WORLD.w / NAV.cell);
+  NAV.rows = Math.ceil(WORLD.h / NAV.cell);
+  NAV.blocked = new Uint8Array(NAV.cols * NAV.rows);
+  const m = 16; // inflate walls by ~enemy radius so paths keep clear of them
+  for (let cy = 0; cy < NAV.rows; cy++) for (let cx = 0; cx < NAV.cols; cx++) {
+    const r = { x: cx * NAV.cell - m, y: cy * NAV.cell - m, w: NAV.cell + m * 2, h: NAV.cell + m * 2 };
+    let b = 0;
+    for (const w of WALL_DATA) if (rectsOverlap(r, w)) { b = 1; break; }
+    NAV.blocked[cy * NAV.cols + cx] = b;
+  }
+}
+function navCell(px, py) {
+  const cx = clamp(Math.floor(px / NAV.cell), 0, NAV.cols - 1);
+  const cy = clamp(Math.floor(py / NAV.cell), 0, NAV.rows - 1);
+  return cy * NAV.cols + cx;
+}
+function nearestFree(px, py) {
+  const c = navCell(px, py); if (!NAV.blocked[c]) return c;
+  const cx = c % NAV.cols, cy = (c / NAV.cols) | 0;
+  for (let r = 1; r < 12; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+    const nx = cx + dx, ny = cy + dy;
+    if (nx < 0 || ny < 0 || nx >= NAV.cols || ny >= NAV.rows) continue;
+    if (!NAV.blocked[ny * NAV.cols + nx]) return ny * NAV.cols + nx;
+  }
+  return c;
+}
+function findPath(sx, sy, tx, ty) {
+  const cols = NAV.cols, rows = NAV.rows, blocked = NAV.blocked;
+  const s = navCell(sx, sy); let t = navCell(tx, ty);
+  if (blocked[t]) t = nearestFree(tx, ty);
+  const tcx = t % cols, tcy = (t / cols) | 0;
+  const h = (i) => { const dx = Math.abs((i % cols) - tcx), dy = Math.abs(((i / cols) | 0) - tcy); return (dx + dy) + (Math.SQRT2 - 2) * Math.min(dx, dy); };
+  const g = new Map([[s, 0]]), f = new Map([[s, h(s)]]), came = new Map();
+  const open = [s], inOpen = new Set([s]);
+  let guard = 0;
+  while (open.length && guard++ < 6000) {
+    let bi = 0; for (let i = 1; i < open.length; i++) if ((f.get(open[i]) ?? 1e9) < (f.get(open[bi]) ?? 1e9)) bi = i;
+    const cur = open.splice(bi, 1)[0]; inOpen.delete(cur);
+    if (cur === t) {
+      const path = []; let c = cur;
+      while (c !== undefined) { path.push({ x: (c % cols) * NAV.cell + NAV.cell / 2, y: ((c / cols) | 0) * NAV.cell + NAV.cell / 2 }); c = came.get(c); }
+      return path.reverse();
+    }
+    const cx = cur % cols, cy = (cur / cols) | 0;
+    for (const [dx, dy] of DIRS8) {
+      const nx = cx + dx, ny = cy + dy;
+      if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+      const ni = ny * cols + nx;
+      if (blocked[ni]) continue;
+      if (dx !== 0 && dy !== 0 && (blocked[cy * cols + nx] || blocked[ny * cols + cx])) continue; // no corner cutting
+      const ng = (g.get(cur) ?? 1e9) + ((dx !== 0 && dy !== 0) ? Math.SQRT2 : 1);
+      if (ng < (g.get(ni) ?? 1e9)) { came.set(ni, cur); g.set(ni, ng); f.set(ni, ng + h(ni)); if (!inOpen.has(ni)) { open.push(ni); inOpen.add(ni); } }
+    }
+  }
+  return null;
+}
+function navToward(e, tx, ty, dt) {
+  if (losClear(e.x, e.y, tx, ty)) { e.path = null; moveToward(e, tx, ty, dt); return; } // direct when visible
+  e.pathT -= dt;
+  if (!e.path || e.pathT <= 0 || dist(tx, ty, e.pathGoal.x, e.pathGoal.y) > 70) {
+    e.path = findPath(e.x, e.y, tx, ty); e.pathGoal = { x: tx, y: ty }; e.pathT = 0.4; e.pathIndex = 1;
+  }
+  if (e.path && e.path.length > 1) {
+    let wp = e.path[Math.min(e.pathIndex, e.path.length - 1)];
+    if (dist(e.x, e.y, wp.x, wp.y) < NAV.cell * 0.7) { e.pathIndex++; wp = e.path[Math.min(e.pathIndex, e.path.length - 1)]; }
+    moveToward(e, wp.x, wp.y, dt);
+  } else { moveToward(e, tx, ty, dt); }
+}
+
 /* ---------- EVENTS / BULLETS ----------------------------------------------- */
 function emitNoise(x, y, radius, source) {
   game.noiseFlashes.push({ x, y, r: radius, life: 0.25 });
   for (const e of game.enemies) {
     if (e === source) continue;
+    if (e.bossRoom && game.doorLocked) continue; // stay calm behind the locked door
     if (dist(e.x, e.y, x, y) <= radius && e.state !== "chase") { e.state = "search"; e.lastKnown = { x, y }; e.searchT = 0; }
   }
 }
@@ -377,10 +469,10 @@ function fireAimed(e, speed, dmg, col, jitter) {
 }
 function bossScatter(e) {
   const p = game.player, base = Math.atan2(p.y - e.y, p.x - e.x);
-  const pellets = 7, spread = 50 * Math.PI / 180;
+  const pellets = 9, spread = 56 * Math.PI / 180;
   for (let i = 0; i < pellets; i++) {
     const ang = base + (i / (pellets - 1) - 0.5) * spread, dir = { x: Math.cos(ang), y: Math.sin(ang) };
-    spawnBullet(e.x + dir.x * (e.r + 6), e.y + dir.y * (e.r + 6), dir, 470, 8, "#ff7adf", false);
+    spawnBullet(e.x + dir.x * (e.r + 6), e.y + dir.y * (e.r + 6), dir, 500, 8, "#ff7adf", false);
   }
   emitNoise(e.x, e.y, 280, e);
 }
@@ -393,9 +485,9 @@ function enemyAttack(e, dt) {
     emitNoise(e.x, e.y, 200, e);
     return;
   }
-  // Boss alternates: a wide scattershot fan, then a fast aimed 3-round burst.
-  if (e.atk === 0) { bossScatter(e); e.atk = 1; e.fireCd = 1.7; }
-  else { e.burst = 3; e.burstT = 0; e.atk = 0; e.fireCd = 1.9; }
+  // Boss alternates: a wide scattershot fan, then a fast aimed 4-round burst.
+  if (e.atk === 0) { bossScatter(e); e.atk = 1; e.fireCd = 1.15; }
+  else { e.burst = 4; e.burstT = 0; e.atk = 0; e.fireCd = 1.3; }
 }
 function updateEnemy(e, dt) {
   const p = game.player;
@@ -403,7 +495,7 @@ function updateEnemy(e, dt) {
   // Boss burst: fire queued aimed shots in quick succession.
   if (e.data.boss && e.burst > 0) {
     e.burstT -= dt;
-    if (e.burstT <= 0) { fireAimed(e, 580, 9, "#ff7adf", 0.04); e.burst--; e.burstT = 0.1; if (e.burst === 0) emitNoise(e.x, e.y, 240, e); }
+    if (e.burstT <= 0) { fireAimed(e, 600, 9, "#ff7adf", 0.04); e.burst--; e.burstT = 0.08; if (e.burst === 0) emitNoise(e.x, e.y, 240, e); }
   }
   if (e.state === "patrol") {
     if (seesPlayer(e)) { e.state = "chase"; e.lastKnown = { x: p.x, y: p.y }; return; }
@@ -414,15 +506,15 @@ function updateEnemy(e, dt) {
     }
   } else if (e.state === "search") {
     if (seesPlayer(e)) { e.state = "chase"; e.lastKnown = { x: p.x, y: p.y }; return; }
-    moveToward(e, e.lastKnown.x, e.lastKnown.y, dt);
+    navToward(e, e.lastKnown.x, e.lastKnown.y, dt);
     e.searchT += dt;
     if (dist(e.x, e.y, e.lastKnown.x, e.lastKnown.y) < 12 || e.searchT > 4) e.state = "patrol";
   } else {
     if (seesPlayer(e)) {
       e.lostT = 0; e.lastKnown = { x: p.x, y: p.y };
-      if (dist(e.x, e.y, p.x, p.y) > e.data.attackRange) moveToward(e, p.x, p.y, dt); else enemyAttack(e, dt);
+      if (dist(e.x, e.y, p.x, p.y) > e.data.attackRange) navToward(e, p.x, p.y, dt); else enemyAttack(e, dt);
     } else {
-      e.lostT += dt; moveToward(e, e.lastKnown.x, e.lastKnown.y, dt);
+      e.lostT += dt; navToward(e, e.lastKnown.x, e.lastKnown.y, dt);
       if (e.lostT > 2.5) e.state = "search";
     }
   }
@@ -430,12 +522,24 @@ function updateEnemy(e, dt) {
 
 /* ---------- RUN / EXTRACTION ----------------------------------------------- */
 function endRun(extracted) { game.run.result = extracted; game.state = "result"; }
+function unlockDoor() {
+  if (!game.doorLocked) return;
+  game.doorLocked = false;
+  WALL_DATA = WALL_DATA.filter((w) => w !== game.doorWall);
+  buildNav();
+  game.announce = "BOSS ROOM UNLOCKED"; game.announceT = 2.5;
+}
 function updateRun(dt) {
   const r = game.run;
   r.timeLeft -= dt;
   if (r.timeLeft <= 0 && !r.alarm) {
     r.timeLeft = 0; r.alarm = true;
     for (const e of game.enemies) if (e.state !== "chase") { e.state = "search"; e.lastKnown = { x: game.player.x, y: game.player.y }; e.searchT = 0; }
+  }
+  // Boss-room door opens once the main-room guards are cleared, or the timer runs out.
+  if (game.doorLocked) {
+    const outsideAlive = game.enemies.some((e) => !e.bossRoom);
+    if (!outsideAlive || r.alarm) unlockDoor();
   }
   const p = game.player;
   if (!r.extractDone) {
@@ -458,6 +562,7 @@ function update(dt) {
   for (const s of game.sparks) s.life -= dt;
   game.sparks = game.sparks.filter((s) => s.life > 0);
   if (game.damageFlash > 0) game.damageFlash -= dt * 2.2;
+  if (game.announceT > 0) game.announceT -= dt;
 }
 
 function draw() {
@@ -495,7 +600,13 @@ function draw() {
     ctx.fillStyle = lp.item.color; ctx.fillRect(lp.x - 9, lp.y - 9, 18, 18);
     ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5; ctx.strokeRect(lp.x - 9, lp.y - 9, 18, 18);
   }
-  ctx.fillStyle = "#383846"; for (const w of WALL_DATA) ctx.fillRect(w.x, w.y, w.w, w.h);
+  for (const w of WALL_DATA) { ctx.fillStyle = w.isDoor ? "#8a3b3b" : "#383846"; ctx.fillRect(w.x, w.y, w.w, w.h); }
+  if (game.doorLocked) {
+    ctx.fillStyle = "rgba(255,160,160,0.9)"; ctx.font = "12px system-ui"; ctx.textAlign = "center";
+    ctx.fillText("LOCKED", DOOR.x + DOOR.w / 2, DOOR.y - 8);
+  } else {
+    ctx.strokeStyle = "rgba(120,255,160,0.45)"; ctx.lineWidth = 2; ctx.strokeRect(DOOR.x, DOOR.y, DOOR.w, DOOR.h);
+  }
   for (const b of game.bullets) { ctx.fillStyle = b.color; ctx.beginPath(); ctx.arc(b.x, b.y, BULLET_R, 0, Math.PI * 2); ctx.fill(); }
   for (const s of game.sparks) {
     const a = clamp(s.life / 0.18, 0, 1);
@@ -546,9 +657,9 @@ function drawHUD() {
     ctx.fillStyle = "rgba(255,40,40," + (clamp(game.damageFlash, 0, 1) * 0.32).toFixed(3) + ")";
     ctx.fillRect(0, 0, CW, CH);
   }
-  // boss health bar
+  // boss health bar (only once the room is unlocked)
   const boss = game.enemies.find((e) => e.data.boss);
-  if (boss) {
+  if (boss && !game.doorLocked) {
     const bw = Math.min(CW - 40, 520), bx = (CW - bw) / 2, by = 8;
     ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(bx, by, bw, 14);
     ctx.fillStyle = "#c94dff"; ctx.fillRect(bx, by, bw * clamp(boss.hp / boss.data.maxHp, 0, 1), 14);
@@ -568,6 +679,10 @@ function drawHUD() {
   if (!isTouch) {
     ctx.fillStyle = "rgba(255,255,255,0.55)"; ctx.font = "13px system-ui";
     ctx.fillText("WASD move · Shift sprint · Space dodge · Mouse aim · LMB fire · R reload", 16, CH - 18);
+  }
+  if (game.announceT > 0) {
+    ctx.textAlign = "center"; ctx.fillStyle = "rgba(255,220,120," + clamp(game.announceT, 0, 1).toFixed(2) + ")";
+    ctx.font = "bold 30px system-ui"; ctx.fillText(game.announce, CW / 2, 92); ctx.textAlign = "left";
   }
   if (game.state === "result") {
     ctx.fillStyle = "rgba(0,0,0,0.7)"; ctx.fillRect(0, 0, CW, CH);
@@ -623,7 +738,7 @@ requestAnimationFrame(loop);
 if (typeof module !== "undefined") {
   module.exports = { get game() { return game; }, update, draw, startGame, keys, EXTRACTION,
                      setMouse: (v) => { mouseDown = v; }, onTouchStart, onTouchMove, onTouchEnd, touch, buttons,
-                     getMoveDir, getAim, isTouch };
+                     getMoveDir, getAim, isTouch, findPath, navCell, NAV, get WALL() { return WALL_DATA; } };
 }
 </script>
 </body>
