@@ -9,23 +9,20 @@
                position: fixed; overscroll-behavior: none; }
   canvas { display: block; touch-action: none; -webkit-user-select: none; user-select: none;
            -webkit-tap-highlight-color: transparent; cursor: crosshair; }
-  #hint { position: fixed; left: 0; right: 0; bottom: 8px; text-align: center;
-          color: #888; font: 12px/1.4 system-ui, sans-serif; pointer-events: none; }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
-<div id="hint">Click the game once if keys don't respond.</div>
 <script>
 "use strict";
 /* ============================================================================
-   ECHO VAULTS — single-file vertical slice (web port of the Godot Fas 1 design)
-   Core loop: Enter -> loot -> shoot -> extract (or die).
-   Desktop: WASD + mouse.  Mobile: twin-stick touch (auto-detected).
-   Just open this file in a browser.
+   ECHO VAULTS — single-file vertical slice (web port of the Godot design)
+   Loop: hub -> pick vault & buy upgrades -> raid (loot/shoot/extract) -> hub.
+   Desktop: WASD + mouse. Mobile: twin-stick touch (auto-detected).
+   Progression (Echo Fragments + upgrades) persists in localStorage.
    ========================================================================== */
 
-/* ---------- DATA (data-driven config; add content here, not in the logic) -- */
+/* ---------- DATA (data-driven; add content here, not in the logic) --------- */
 const WEAPONS = {
   pistol: { name: "Echo Pistol", damage: 16, fireRate: 6, projSpeed: 900,
             spread: 1.5, mag: 14, reload: 1.1, noise: 280, projColor: "#ffe14d" }
@@ -38,77 +35,116 @@ const BOSSES = {
   warden: { name: "Vault Warden", maxHp: 200, speed: 85, damage: 9, attackRange: 520,
             fireRate: 1, hearing: 400, sight: 760, color: "#c94dff", lootChance: 1, radius: 26, boss: true }
 };
-const LOOT = { medkit: { name: "Medkit", color: "#4de372", value: 120 } };
-const VAULTS = {
-  industrial: { name: "Industrial Vault 01", raidTime: 75, loot: "medkit", enemy: "guard" }
-};
+const LOOT = { medkit: { name: "Salvage", color: "#4de372", value: 1 } };
 
-/* ---------- WORLD ---------------------------------------------------------- */
+const UPGRADES = [
+  { id: "maxHp",  name: "Max HP",         desc: "+25 max HP",         base: 40, step: 25, max: 6 },
+  { id: "damage", name: "Weapon Damage",  desc: "+4 damage per shot", base: 55, step: 30, max: 6 },
+  { id: "mag",    name: "Magazine",       desc: "+4 magazine size",   base: 45, step: 25, max: 6 },
+  { id: "speed",  name: "Move Speed",     desc: "+8% move speed",     base: 50, step: 30, max: 5 },
+  { id: "dodge",  name: "Dodge Recharge", desc: "-0.08s dodge cd",    base: 50, step: 30, max: 4 }
+];
+
 const WORLD = { w: 1400, h: 1000 };
-// Static walls (always solid). The boss-room door is added per run at startGame.
-const STATIC_WALLS = [
-  // outer
+const OUTER = [
   { x: 0, y: 0, w: 1400, h: 40 }, { x: 0, y: 960, w: 1400, h: 40 },
-  { x: 0, y: 0, w: 40, h: 1000 }, { x: 1360, y: 0, w: 40, h: 1000 },
-  // main-room cover
-  { x: 300, y: 250, w: 220, h: 40 }, { x: 820, y: 200, w: 40, h: 240 },
-  { x: 560, y: 520, w: 180, h: 40 }, { x: 300, y: 650, w: 40, h: 200 },
-  // boss-room divider (leaves a door gap at y 450..570)
-  { x: 1000, y: 80, w: 44, h: 370 }, { x: 1000, y: 570, w: 44, h: 350 },
-  // boss-room cover
-  { x: 1180, y: 320, w: 40, h: 180 }, { x: 1120, y: 700, w: 170, h: 40 }
+  { x: 0, y: 0, w: 40, h: 1000 }, { x: 1360, y: 0, w: 40, h: 1000 }
 ];
-const DOOR = { x: 1000, y: 450, w: 44, h: 120, isDoor: true };   // lockable gate
-let WALL_DATA = STATIC_WALLS.slice();                            // rebuilt each run (with/without the door)
+// Three vaults with distinct layouts. boss = null means a pure loot run.
+const MAPS = [
+  {
+    id: "industrial", name: "Industrial Vault", floor: "#15151c", grid: "#1d1d27",
+    difficulty: 2, lootValue: 25, raidTime: 75,
+    playerSpawn: { x: 120, y: 860 }, extraction: { x: 140, y: 200, r: 55 },
+    walls: OUTER.concat([
+      { x: 300, y: 250, w: 220, h: 40 }, { x: 820, y: 200, w: 40, h: 240 },
+      { x: 560, y: 520, w: 180, h: 40 }, { x: 300, y: 650, w: 40, h: 200 },
+      { x: 1000, y: 80, w: 44, h: 370 }, { x: 1000, y: 570, w: 44, h: 350 },
+      { x: 1180, y: 320, w: 40, h: 180 }, { x: 1120, y: 700, w: 170, h: 40 }
+    ]),
+    enemies: [ { x: 760, y: 300 }, { x: 480, y: 200 }, { x: 820, y: 780 }, { x: 320, y: 320 } ],
+    loot: [ { x: 250, y: 320 }, { x: 700, y: 250 }, { x: 450, y: 760 }, { x: 620, y: 600 } ],
+    boss: { id: "warden", spawn: { x: 1200, y: 500 }, door: { x: 1000, y: 450, w: 44, h: 120 },
+            guards: [ { x: 1110, y: 250 }, { x: 1270, y: 760 } ], loot: [ { x: 1200, y: 300 }, { x: 1280, y: 560 } ] }
+  },
+  {
+    id: "overgrown", name: "Overgrown Depot", floor: "#121a14", grid: "#1b2a1e",
+    difficulty: 1, lootValue: 16, raidTime: 65,
+    playerSpawn: { x: 120, y: 500 }, extraction: { x: 1250, y: 120, r: 55 },
+    walls: OUTER.concat([
+      { x: 300, y: 200, w: 120, h: 120 }, { x: 700, y: 300, w: 140, h: 40 }, { x: 980, y: 200, w: 40, h: 220 },
+      { x: 420, y: 600, w: 200, h: 40 }, { x: 850, y: 640, w: 120, h: 120 }, { x: 1080, y: 700, w: 40, h: 160 },
+      { x: 560, y: 800, w: 160, h: 40 }
+    ]),
+    enemies: [ { x: 420, y: 320 }, { x: 800, y: 250 }, { x: 1120, y: 360 }, { x: 520, y: 720 }, { x: 980, y: 520 }, { x: 1180, y: 820 } ],
+    loot: [ { x: 320, y: 440 }, { x: 760, y: 240 }, { x: 1040, y: 300 }, { x: 470, y: 760 }, { x: 900, y: 800 }, { x: 1220, y: 600 }, { x: 640, y: 520 } ],
+    boss: null
+  },
+  {
+    id: "arcane", name: "Arcane Lab", floor: "#16121f", grid: "#241b2e",
+    difficulty: 3, lootValue: 34, raidTime: 80,
+    playerSpawn: { x: 140, y: 880 }, extraction: { x: 1250, y: 880, r: 55 },
+    walls: OUTER.concat([
+      { x: 80, y: 360, w: 560, h: 44 }, { x: 760, y: 360, w: 560, h: 44 },
+      { x: 300, y: 560, w: 200, h: 40 }, { x: 800, y: 600, w: 40, h: 220 },
+      { x: 540, y: 790, w: 200, h: 40 }, { x: 1060, y: 560, w: 40, h: 200 }
+    ]),
+    enemies: [ { x: 400, y: 620 }, { x: 900, y: 520 }, { x: 1150, y: 820 }, { x: 320, y: 840 }, { x: 700, y: 720 } ],
+    loot: [ { x: 250, y: 620 }, { x: 700, y: 560 }, { x: 1120, y: 660 }, { x: 520, y: 880 }, { x: 960, y: 800 } ],
+    boss: { id: "warden", spawn: { x: 700, y: 200 }, door: { x: 640, y: 360, w: 120, h: 44 },
+            guards: [ { x: 300, y: 200 }, { x: 1050, y: 220 } ], loot: [ { x: 320, y: 290 }, { x: 1040, y: 150 } ] }
+  }
+];
 
-const ENEMY_SPAWNS = [   // main-room guards — clear them (or run out the timer) to open the door
-  { x: 760, y: 300 }, { x: 480, y: 200 }, { x: 820, y: 780 }, { x: 320, y: 320 }
-];
-const BOSS_SPAWN = { x: 1200, y: 500 };
-const BOSSROOM_GUARDS = [ { x: 1110, y: 250 }, { x: 1270, y: 760 } ];
-const LOOT_SPAWNS = [     // main-room loot
-  { x: 250, y: 320 }, { x: 700, y: 250 }, { x: 450, y: 760 }, { x: 620, y: 600 }
-];
-const BOSSROOM_LOOT = [ { x: 1200, y: 300 }, { x: 1280, y: 560 } ];
-const EXTRACTION = { x: 140, y: 200, r: 55 };
-const PLAYER_SPAWN = { x: 120, y: 860 };
+let WALL_DATA = [];
 const BULLET_R = 5;
+
+/* ---------- PERSISTENCE (Echo Fragments + upgrades) ------------------------ */
+const SAVE_KEY = "echoVaultsSave_v1";
+function defaultProfile() { return { fragments: 0, upgrades: { maxHp: 0, damage: 0, mag: 0, speed: 0, dodge: 0 }, version: 1 }; }
+function loadProfile() {
+  try {
+    const s = (typeof localStorage !== "undefined") ? localStorage.getItem(SAVE_KEY) : null;
+    if (s) { const p = JSON.parse(s); const d = defaultProfile(); return { ...d, ...p, upgrades: { ...d.upgrades, ...(p.upgrades || {}) } }; }
+  } catch (e) {}
+  return defaultProfile();
+}
+function saveProfile() { try { if (typeof localStorage !== "undefined") localStorage.setItem(SAVE_KEY, JSON.stringify(profile)); } catch (e) {} }
+let profile = loadProfile();
+
+function upgradeLevel(id) { return profile.upgrades[id] || 0; }
+function upgradeCost(s) { const lvl = upgradeLevel(s.id); return lvl >= s.max ? null : (s.base + s.step * lvl); }
+function buyUpgrade(s) { const c = upgradeCost(s); if (c == null || profile.fragments < c) return; profile.fragments -= c; profile.upgrades[s.id] = upgradeLevel(s.id) + 1; saveProfile(); }
 
 /* ---------- CANVAS / DISPLAY ----------------------------------------------- */
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 let CW = 0, CH = 0, dpr = 1;
-const view = { scale: 1, camX: 0, camY: 0 }; // world zoom + camera top-left (adapts to screen size)
-const STICK_R = 70;                        // touch joystick radius (css px)
+const view = { scale: 1, camX: 0, camY: 0 };
+const STICK_R = 70;
 const buttons = { dodge: {}, reload: {} };
-
 const isTouch = (typeof window !== "undefined" && "ontouchstart" in window) ||
                 (typeof navigator !== "undefined" && navigator.maxTouchPoints > 0);
 
 function resize() {
   dpr = Math.min((typeof window !== "undefined" && window.devicePixelRatio) || 1, 2);
   CW = window.innerWidth; CH = window.innerHeight;
-  canvas.width = Math.floor(CW * dpr);
-  canvas.height = Math.floor(CH * dpr);
-  canvas.style.width = CW + "px";
-  canvas.style.height = CH + "px";
-  // Zoom so the smaller screen axis shows ~760 world units (zoom out on phones).
+  canvas.width = Math.floor(CW * dpr); canvas.height = Math.floor(CH * dpr);
+  canvas.style.width = CW + "px"; canvas.style.height = CH + "px";
   view.scale = clamp(Math.min(CW, CH) / 760, 0.5, 1.25);
-  // Touch controls layout (screen space).
   buttons.dodge = { x: CW - 82, y: CH - 210, r: 44, label: "DODGE" };
   buttons.reload = { x: CW - 82, y: CH - 96, r: 36, label: "RELOAD" };
 }
 window.addEventListener("resize", resize);
 
-/* ---------- INPUT: keyboard + mouse (desktop) ------------------------------ */
+/* ---------- INPUT: keyboard + mouse ---------------------------------------- */
 const keys = {};
 let mouseDown = false;
 const mouseScreen = { x: 0, y: 0 };
-
 window.addEventListener("keydown", (e) => {
   if ([" ", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) e.preventDefault();
   if (e.code === "Space" && game.state === "playing") tryDodge();
-  if (e.code === "Enter" && game.state === "result") startGame();
+  if (e.code === "Enter" && game.state === "result") returnToHub();
   keys[e.code] = true;
 });
 window.addEventListener("keyup", (e) => { keys[e.code] = false; });
@@ -116,37 +152,33 @@ canvas.addEventListener("mousemove", (e) => {
   const r = canvas.getBoundingClientRect();
   mouseScreen.x = e.clientX - r.left; mouseScreen.y = e.clientY - r.top;
 });
-canvas.addEventListener("mousedown", () => {
-  if (game.state === "result") { startGame(); return; }
+canvas.addEventListener("mousedown", (e) => {
+  const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  if (game.state === "hub") { handleHubClick(x, y); return; }
+  if (game.state === "result") { returnToHub(); return; }
   mouseDown = true;
 });
 window.addEventListener("mouseup", () => { mouseDown = false; });
 
-/* ---------- INPUT: touch (mobile twin-stick) ------------------------------- */
+/* ---------- INPUT: touch (twin-stick) -------------------------------------- */
 const touch = {
   moveId: null, moveOrigin: { x: 0, y: 0 }, moveCur: { x: 0, y: 0 }, moveVec: { x: 0, y: 0 }, moveMag: 0,
   aimId: null, aimOrigin: { x: 0, y: 0 }, aimCur: { x: 0, y: 0 }, aimVec: { x: 1, y: 0 }, aimActive: false, aimUsed: false
 };
 const touchRoles = {};
 const inBtn = (x, y, b) => Math.hypot(x - b.x, y - b.y) <= b.r;
-
 function onTouchStart(e) {
   e.preventDefault();
   const r = canvas.getBoundingClientRect();
   for (const t of e.changedTouches) {
-    if (game.state === "result") { startGame(); return; }
     const x = t.clientX - r.left, y = t.clientY - r.top;
+    if (game.state === "hub") { handleHubClick(x, y); return; }
+    if (game.state === "result") { returnToHub(); return; }
     if (inBtn(x, y, buttons.dodge)) { touchRoles[t.identifier] = "dodge"; tryDodge(); continue; }
     if (inBtn(x, y, buttons.reload)) { touchRoles[t.identifier] = "reload"; doReload(); continue; }
     if (x < CW / 2) {
-      if (touch.moveId === null) {
-        touch.moveId = t.identifier; touch.moveOrigin = { x, y }; touch.moveCur = { x, y };
-        touch.moveVec = { x: 0, y: 0 }; touch.moveMag = 0; touchRoles[t.identifier] = "move";
-      }
-    } else if (touch.aimId === null) {
-      touch.aimId = t.identifier; touch.aimOrigin = { x, y }; touch.aimCur = { x, y };
-      touch.aimActive = true; touchRoles[t.identifier] = "aim";
-    }
+      if (touch.moveId === null) { touch.moveId = t.identifier; touch.moveOrigin = { x, y }; touch.moveCur = { x, y }; touch.moveVec = { x: 0, y: 0 }; touch.moveMag = 0; touchRoles[t.identifier] = "move"; }
+    } else if (touch.aimId === null) { touch.aimId = t.identifier; touch.aimOrigin = { x, y }; touch.aimCur = { x, y }; touch.aimActive = true; touchRoles[t.identifier] = "aim"; }
   }
 }
 function onTouchMove(e) {
@@ -155,17 +187,13 @@ function onTouchMove(e) {
   for (const t of e.changedTouches) {
     const x = t.clientX - r.left, y = t.clientY - r.top;
     if (t.identifier === touch.moveId) {
-      const dx = x - touch.moveOrigin.x, dy = y - touch.moveOrigin.y;
-      const len = Math.hypot(dx, dy), cl = Math.min(len, STICK_R), d = norm(dx, dy);
-      touch.moveVec = { x: d.x * cl / STICK_R, y: d.y * cl / STICK_R };
-      touch.moveMag = cl / STICK_R;
+      const dx = x - touch.moveOrigin.x, dy = y - touch.moveOrigin.y, len = Math.hypot(dx, dy), cl = Math.min(len, STICK_R), d = norm(dx, dy);
+      touch.moveVec = { x: d.x * cl / STICK_R, y: d.y * cl / STICK_R }; touch.moveMag = cl / STICK_R;
       touch.moveCur = { x: touch.moveOrigin.x + d.x * cl, y: touch.moveOrigin.y + d.y * cl };
     } else if (t.identifier === touch.aimId) {
-      const dx = x - touch.aimOrigin.x, dy = y - touch.aimOrigin.y;
-      const len = Math.hypot(dx, dy), cl = Math.min(len, STICK_R), d = norm(dx, dy);
+      const dx = x - touch.aimOrigin.x, dy = y - touch.aimOrigin.y, len = Math.hypot(dx, dy), cl = Math.min(len, STICK_R), d = norm(dx, dy);
       if (len > 10) { touch.aimVec = { x: d.x, y: d.y }; touch.aimUsed = true; }
-      touch.aimCur = { x: touch.aimOrigin.x + d.x * cl, y: touch.aimOrigin.y + d.y * cl };
-      touch.aimActive = true;
+      touch.aimCur = { x: touch.aimOrigin.x + d.x * cl, y: touch.aimOrigin.y + d.y * cl }; touch.aimActive = true;
     }
   }
 }
@@ -183,31 +211,48 @@ canvas.addEventListener("touchend", onTouchEnd, { passive: false });
 canvas.addEventListener("touchcancel", onTouchEnd, { passive: false });
 
 /* ---------- GAME STATE ----------------------------------------------------- */
-const game = { state: "boot", run: null, player: null, enemies: [], bullets: [], pickups: [], noiseFlashes: [], sparks: [], damageFlash: 0, doorLocked: true, doorWall: null, announce: "", announceT: 0 };
-const reticle = { x: 0, y: 0 };   // where the crosshair is drawn (= where shots go)
+const game = { state: "boot", map: null, run: null, player: null, enemies: [], bullets: [], pickups: [],
+               noiseFlashes: [], sparks: [], damageFlash: 0, hasBoss: false, doorLocked: false, doorWall: null,
+               doorRect: null, announce: "", announceT: 0 };
+const reticle = { x: 0, y: 0 };
+let hubButtons = [];
 
-function startGame() {
-  const vault = VAULTS.industrial;
-  WALL_DATA = STATIC_WALLS.map((w) => ({ ...w }));
-  const door = { ...DOOR }; WALL_DATA.push(door);
+function returnToHub() { game.state = "hub"; }
+
+function startRaid(map) {
+  game.map = map;
+  WALL_DATA = map.walls.map((w) => ({ ...w }));
+  game.hasBoss = !!map.boss; game.doorLocked = false; game.doorWall = null; game.doorRect = null;
+  if (map.boss) {
+    const door = { ...map.boss.door, isDoor: true };
+    WALL_DATA.push(door); game.doorWall = door; game.doorRect = { ...map.boss.door }; game.doorLocked = true;
+  }
   buildNav();
-  game.run = { vault, timeLeft: vault.raidTime, loot: 0, alarm: false, extractT: 0, extractDone: false };
-  game.doorLocked = true; game.doorWall = door; game.announce = ""; game.announceT = 0;
+  game.run = { map, timeLeft: map.raidTime, loot: 0, alarm: false, extractT: 0, extractDone: false, reward: 0 };
   game.player = makePlayer();
-  game.enemies = ENEMY_SPAWNS.map((s) => makeEnemy(ENEMIES[vault.enemy], s.x, s.y));
-  for (const s of BOSSROOM_GUARDS) { const gd = makeEnemy(ENEMIES[vault.enemy], s.x, s.y); gd.bossRoom = true; game.enemies.push(gd); }
-  const bossE = makeEnemy(BOSSES.warden, BOSS_SPAWN.x, BOSS_SPAWN.y); bossE.bossRoom = true; game.enemies.push(bossE);
-  game.bullets = [];
-  game.pickups = LOOT_SPAWNS.map((s) => ({ x: s.x, y: s.y, item: LOOT[vault.loot] }));
-  for (const s of BOSSROOM_LOOT) game.pickups.push({ x: s.x, y: s.y, item: LOOT[vault.loot] });
-  game.noiseFlashes = []; game.sparks = []; game.damageFlash = 0;
+  game.enemies = map.enemies.map((s) => makeEnemy(ENEMIES.guard, s.x, s.y));
+  if (map.boss) {
+    for (const s of map.boss.guards) { const gd = makeEnemy(ENEMIES.guard, s.x, s.y); gd.bossRoom = true; game.enemies.push(gd); }
+    const b = makeEnemy(BOSSES[map.boss.id], map.boss.spawn.x, map.boss.spawn.y); b.bossRoom = true; game.enemies.push(b);
+  }
+  game.pickups = map.loot.map((s) => ({ x: s.x, y: s.y, item: LOOT.medkit }));
+  if (map.boss) for (const s of map.boss.loot) game.pickups.push({ x: s.x, y: s.y, item: LOOT.medkit });
+  game.bullets = []; game.noiseFlashes = []; game.sparks = []; game.damageFlash = 0; game.announce = ""; game.announceT = 0;
   game.state = "playing";
 }
+
 function makePlayer() {
-  const wpn = WEAPONS.pistol;
-  return { x: PLAYER_SPAWN.x, y: PLAYER_SPAWN.y, r: 14, hp: 100, maxHp: 100, speed: 220, sprintMul: 1.6,
-           aim: { x: 1, y: 0 }, weapon: wpn, fireCd: 0, ammo: wpn.mag, reloading: false, reloadLeft: 0,
-           dodging: false, dodgeLeft: 0, dodgeCd: 0, dodgeDir: { x: 0, y: 0 }, noiseT: 0, hitFlash: 0, dead: false };
+  const wpn = WEAPONS.pistol, u = profile.upgrades, sp = game.map.playerSpawn;
+  const maxHp = 100 + u.maxHp * 25;
+  const p = {
+    x: sp.x, y: sp.y, r: 14, hp: maxHp, maxHp, speed: 220 * (1 + u.speed * 0.08), sprintMul: 1.6,
+    aim: { x: 1, y: 0 }, weapon: wpn, damage: wpn.damage + u.damage * 4, magSize: wpn.mag + u.mag * 4,
+    fireCd: 0, ammo: 0, reloading: false, reloadLeft: 0,
+    dodging: false, dodgeLeft: 0, dodgeCd: 0, dodgeCdMax: Math.max(0.25, 0.6 - u.dodge * 0.08),
+    dodgeDir: { x: 0, y: 0 }, noiseT: 0, hitFlash: 0, dead: false
+  };
+  p.ammo = p.magSize;
+  return p;
 }
 function makeEnemy(data, x, y) {
   return { x, y, r: data.radius || 13, data, hp: data.maxHp, state: "patrol", origin: { x, y }, target: { x, y },
@@ -219,84 +264,43 @@ function makeEnemy(data, x, y) {
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const dist = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
 function norm(x, y) { const l = Math.hypot(x, y) || 1; return { x: x / l, y: y / l }; }
-function circleRect(cx, cy, r, w) {
-  const nx = clamp(cx, w.x, w.x + w.w), ny = clamp(cy, w.y, w.y + w.h);
-  return dist(cx, cy, nx, ny) < r;
-}
+function circleRect(cx, cy, r, w) { const nx = clamp(cx, w.x, w.x + w.w), ny = clamp(cy, w.y, w.y + w.h); return dist(cx, cy, nx, ny) < r; }
 function pointInWall(px, py, w) { return px >= w.x && px <= w.x + w.w && py >= w.y && py <= w.y + w.h; }
 function tryMove(ent, dx, dy) {
   ent.x += dx;
-  for (const w of WALL_DATA) if (circleRect(ent.x, ent.y, ent.r, w)) {
-    if (dx > 0) ent.x = w.x - ent.r; else if (dx < 0) ent.x = w.x + w.w + ent.r;
-  }
+  for (const w of WALL_DATA) if (circleRect(ent.x, ent.y, ent.r, w)) { if (dx > 0) ent.x = w.x - ent.r; else if (dx < 0) ent.x = w.x + w.w + ent.r; }
   ent.y += dy;
-  for (const w of WALL_DATA) if (circleRect(ent.x, ent.y, ent.r, w)) {
-    if (dy > 0) ent.y = w.y - ent.r; else if (dy < 0) ent.y = w.y + w.h + ent.r;
-  }
+  for (const w of WALL_DATA) if (circleRect(ent.x, ent.y, ent.r, w)) { if (dy > 0) ent.y = w.y - ent.r; else if (dy < 0) ent.y = w.y + w.h + ent.r; }
 }
 function losClear(ax, ay, bx, by) {
   const d = dist(ax, ay, bx, by), steps = Math.ceil(d / 6);
-  for (let i = 1; i < steps; i++) {
-    const t = i / steps, px = ax + (bx - ax) * t, py = ay + (by - ay) * t;
-    for (const w of WALL_DATA) if (pointInWall(px, py, w)) return false;
-  }
+  for (let i = 1; i < steps; i++) { const t = i / steps, px = ax + (bx - ax) * t, py = ay + (by - ay) * t; for (const w of WALL_DATA) if (pointInWall(px, py, w)) return false; }
   return true;
 }
 
-/* ---------- CAMERA (clamped to world bounds so the screen is always full) -- */
-function computeCamera(p) {
-  const viewW = CW / view.scale, viewH = CH / view.scale;
-  view.camX = (viewW >= WORLD.w) ? (WORLD.w - viewW) / 2 : clamp(p.x - viewW / 2, 0, WORLD.w - viewW);
-  view.camY = (viewH >= WORLD.h) ? (WORLD.h - viewH) / 2 : clamp(p.y - viewH / 2, 0, WORLD.h - viewH);
-}
-
-/* ---------- INPUT INTENTS (unify keyboard/mouse + touch) ------------------- */
-function getMoveDir() {
-  let ix = 0, iy = 0;
-  if (keys["KeyD"]) ix += 1; if (keys["KeyA"]) ix -= 1;
-  if (keys["KeyS"]) iy += 1; if (keys["KeyW"]) iy -= 1;
-  if (ix !== 0 || iy !== 0) { const d = norm(ix, iy); return { x: d.x, y: d.y, moving: true, sprint: !!(keys["ShiftLeft"] || keys["ShiftRight"]) }; }
-  if (touch.moveId !== null && touch.moveMag > 0.15) {
-    const d = norm(touch.moveVec.x, touch.moveVec.y);
-    return { x: d.x, y: d.y, moving: true, sprint: touch.moveMag > 0.78 };
-  }
-  return { x: 0, y: 0, moving: false, sprint: false };
-}
-function getAim(p) {
-  if (touch.aimUsed) return touch.aimVec;
-  const mwx = view.camX + mouseScreen.x / view.scale;
-  const mwy = view.camY + mouseScreen.y / view.scale;
-  const a = norm(mwx - p.x, mwy - p.y);
-  return (a.x || a.y) ? a : p.aim;
-}
-
-/* ---------- NAVIGATION (grid A* so enemies route around walls) ------------- */
+/* ---------- NAVIGATION (grid A*) ------------------------------------------- */
 const NAV = { cell: 40, cols: 0, rows: 0, blocked: null };
 const DIRS8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
 function rectsOverlap(a, w) { return a.x < w.x + w.w && a.x + a.w > w.x && a.y < w.y + w.h && a.y + a.h > w.y; }
 function buildNav() {
-  NAV.cols = Math.ceil(WORLD.w / NAV.cell);
-  NAV.rows = Math.ceil(WORLD.h / NAV.cell);
+  NAV.cols = Math.ceil(WORLD.w / NAV.cell); NAV.rows = Math.ceil(WORLD.h / NAV.cell);
   NAV.blocked = new Uint8Array(NAV.cols * NAV.rows);
-  const m = 16; // inflate walls by ~enemy radius so paths keep clear of them
+  const m = 16;
   for (let cy = 0; cy < NAV.rows; cy++) for (let cx = 0; cx < NAV.cols; cx++) {
     const r = { x: cx * NAV.cell - m, y: cy * NAV.cell - m, w: NAV.cell + m * 2, h: NAV.cell + m * 2 };
-    let b = 0;
-    for (const w of WALL_DATA) if (rectsOverlap(r, w)) { b = 1; break; }
+    let b = 0; for (const w of WALL_DATA) if (rectsOverlap(r, w)) { b = 1; break; }
     NAV.blocked[cy * NAV.cols + cx] = b;
   }
 }
 function navCell(px, py) {
-  const cx = clamp(Math.floor(px / NAV.cell), 0, NAV.cols - 1);
-  const cy = clamp(Math.floor(py / NAV.cell), 0, NAV.rows - 1);
+  const cx = clamp(Math.floor(px / NAV.cell), 0, NAV.cols - 1), cy = clamp(Math.floor(py / NAV.cell), 0, NAV.rows - 1);
   return cy * NAV.cols + cx;
 }
 function nearestFree(px, py) {
   const c = navCell(px, py); if (!NAV.blocked[c]) return c;
   const cx = c % NAV.cols, cy = (c / NAV.cols) | 0;
   for (let r = 1; r < 12; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
-    const nx = cx + dx, ny = cy + dy;
-    if (nx < 0 || ny < 0 || nx >= NAV.cols || ny >= NAV.rows) continue;
+    const nx = cx + dx, ny = cy + dy; if (nx < 0 || ny < 0 || nx >= NAV.cols || ny >= NAV.rows) continue;
     if (!NAV.blocked[ny * NAV.cols + nx]) return ny * NAV.cols + nx;
   }
   return c;
@@ -308,23 +312,16 @@ function findPath(sx, sy, tx, ty) {
   const tcx = t % cols, tcy = (t / cols) | 0;
   const h = (i) => { const dx = Math.abs((i % cols) - tcx), dy = Math.abs(((i / cols) | 0) - tcy); return (dx + dy) + (Math.SQRT2 - 2) * Math.min(dx, dy); };
   const g = new Map([[s, 0]]), f = new Map([[s, h(s)]]), came = new Map();
-  const open = [s], inOpen = new Set([s]);
-  let guard = 0;
+  const open = [s], inOpen = new Set([s]); let guard = 0;
   while (open.length && guard++ < 6000) {
     let bi = 0; for (let i = 1; i < open.length; i++) if ((f.get(open[i]) ?? 1e9) < (f.get(open[bi]) ?? 1e9)) bi = i;
     const cur = open.splice(bi, 1)[0]; inOpen.delete(cur);
-    if (cur === t) {
-      const path = []; let c = cur;
-      while (c !== undefined) { path.push({ x: (c % cols) * NAV.cell + NAV.cell / 2, y: ((c / cols) | 0) * NAV.cell + NAV.cell / 2 }); c = came.get(c); }
-      return path.reverse();
-    }
+    if (cur === t) { const path = []; let c = cur; while (c !== undefined) { path.push({ x: (c % cols) * NAV.cell + NAV.cell / 2, y: ((c / cols) | 0) * NAV.cell + NAV.cell / 2 }); c = came.get(c); } return path.reverse(); }
     const cx = cur % cols, cy = (cur / cols) | 0;
     for (const [dx, dy] of DIRS8) {
-      const nx = cx + dx, ny = cy + dy;
-      if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
-      const ni = ny * cols + nx;
-      if (blocked[ni]) continue;
-      if (dx !== 0 && dy !== 0 && (blocked[cy * cols + nx] || blocked[ny * cols + cx])) continue; // no corner cutting
+      const nx = cx + dx, ny = cy + dy; if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+      const ni = ny * cols + nx; if (blocked[ni]) continue;
+      if (dx !== 0 && dy !== 0 && (blocked[cy * cols + nx] || blocked[ny * cols + cx])) continue;
       const ng = (g.get(cur) ?? 1e9) + ((dx !== 0 && dy !== 0) ? Math.SQRT2 : 1);
       if (ng < (g.get(ni) ?? 1e9)) { came.set(ni, cur); g.set(ni, ng); f.set(ni, ng + h(ni)); if (!inOpen.has(ni)) { open.push(ni); inOpen.add(ni); } }
     }
@@ -332,16 +329,14 @@ function findPath(sx, sy, tx, ty) {
   return null;
 }
 function navToward(e, tx, ty, dt) {
-  if (losClear(e.x, e.y, tx, ty)) { e.path = null; moveToward(e, tx, ty, dt); return; } // direct when visible
+  if (losClear(e.x, e.y, tx, ty)) { e.path = null; moveToward(e, tx, ty, dt); return; }
   e.pathT -= dt;
-  if (!e.path || e.pathT <= 0 || dist(tx, ty, e.pathGoal.x, e.pathGoal.y) > 70) {
-    e.path = findPath(e.x, e.y, tx, ty); e.pathGoal = { x: tx, y: ty }; e.pathT = 0.4; e.pathIndex = 1;
-  }
+  if (!e.path || e.pathT <= 0 || dist(tx, ty, e.pathGoal.x, e.pathGoal.y) > 70) { e.path = findPath(e.x, e.y, tx, ty); e.pathGoal = { x: tx, y: ty }; e.pathT = 0.4; e.pathIndex = 1; }
   if (e.path && e.path.length > 1) {
     let wp = e.path[Math.min(e.pathIndex, e.path.length - 1)];
     if (dist(e.x, e.y, wp.x, wp.y) < NAV.cell * 0.7) { e.pathIndex++; wp = e.path[Math.min(e.pathIndex, e.path.length - 1)]; }
     moveToward(e, wp.x, wp.y, dt);
-  } else { moveToward(e, tx, ty, dt); }
+  } else moveToward(e, tx, ty, dt);
 }
 
 /* ---------- EVENTS / BULLETS ----------------------------------------------- */
@@ -349,13 +344,11 @@ function emitNoise(x, y, radius, source) {
   game.noiseFlashes.push({ x, y, r: radius, life: 0.25 });
   for (const e of game.enemies) {
     if (e === source) continue;
-    if (e.bossRoom && game.doorLocked) continue; // stay calm behind the locked door
+    if (e.bossRoom && game.doorLocked) continue;
     if (dist(e.x, e.y, x, y) <= radius && e.state !== "chase") { e.state = "search"; e.lastKnown = { x, y }; e.searchT = 0; }
   }
 }
-function spawnBullet(x, y, dir, speed, dmg, color, fromPlayer) {
-  game.bullets.push({ x, y, vx: dir.x * speed, vy: dir.y * speed, dmg, color, fromPlayer, life: 2 });
-}
+function spawnBullet(x, y, dir, speed, dmg, color, fromPlayer) { game.bullets.push({ x, y, vx: dir.x * speed, vy: dir.y * speed, dmg, color, fromPlayer, life: 2 }); }
 function addSpark(x, y, col) { game.sparks.push({ x, y, life: 0.18, col }); }
 function updateBullets(dt) {
   const p = game.player;
@@ -373,23 +366,23 @@ function updateBullets(dt) {
 
 /* ---------- PLAYER --------------------------------------------------------- */
 function tryDodge() {
-  const p = game.player;
-  if (!p || p.dead || p.dodging || p.dodgeCd > 0) return;
-  const md = getMoveDir();
-  // dodge in the movement direction, or toward the aim/crosshair when standing still
-  const dir = md.moving ? { x: md.x, y: md.y } : { x: p.aim.x, y: p.aim.y };
-  p.dodgeDir = dir; p.dodging = true; p.dodgeLeft = 0.18; p.dodgeCd = 0.6;
+  const p = game.player; if (!p || p.dead || p.dodging || p.dodgeCd > 0) return;
+  const md = getMoveDir(); const dir = md.moving ? { x: md.x, y: md.y } : { x: p.aim.x, y: p.aim.y };
+  p.dodgeDir = dir; p.dodging = true; p.dodgeLeft = 0.18; p.dodgeCd = p.dodgeCdMax;
 }
-function doReload() {
-  const p = game.player;
-  if (p && !p.dead && !p.reloading && p.ammo < p.weapon.mag) { p.reloading = true; p.reloadLeft = p.weapon.reload; }
+function doReload() { const p = game.player; if (p && !p.dead && !p.reloading && p.ammo < p.magSize) { p.reloading = true; p.reloadLeft = p.weapon.reload; } }
+function damagePlayer(amount) { const p = game.player; if (p.dead || p.dodging) return; p.hp -= amount; p.hitFlash = 0.12; game.damageFlash = 0.6; if (p.hp <= 0) { p.hp = 0; p.dead = true; endRun(false); } }
+function getMoveDir() {
+  let ix = 0, iy = 0;
+  if (keys["KeyD"]) ix += 1; if (keys["KeyA"]) ix -= 1; if (keys["KeyS"]) iy += 1; if (keys["KeyW"]) iy -= 1;
+  if (ix !== 0 || iy !== 0) { const d = norm(ix, iy); return { x: d.x, y: d.y, moving: true, sprint: !!(keys["ShiftLeft"] || keys["ShiftRight"]) }; }
+  if (touch.moveId !== null && touch.moveMag > 0.15) { const d = norm(touch.moveVec.x, touch.moveVec.y); return { x: d.x, y: d.y, moving: true, sprint: touch.moveMag > 0.78 }; }
+  return { x: 0, y: 0, moving: false, sprint: false };
 }
-function damagePlayer(amount) {
-  const p = game.player;
-  if (p.dead || p.dodging) return;
-  p.hp -= amount;
-  p.hitFlash = 0.12; game.damageFlash = 0.6;
-  if (p.hp <= 0) { p.hp = 0; p.dead = true; endRun(false); }
+function getAim(p) {
+  if (touch.aimUsed) return touch.aimVec;
+  const mwx = view.camX + mouseScreen.x / view.scale, mwy = view.camY + mouseScreen.y / view.scale;
+  const a = norm(mwx - p.x, mwy - p.y); return (a.x || a.y) ? a : p.aim;
 }
 function updatePlayer(dt) {
   const p = game.player;
@@ -397,31 +390,20 @@ function updatePlayer(dt) {
   if (p.dodgeCd > 0) p.dodgeCd -= dt;
   if (p.hitFlash > 0) p.hitFlash -= dt;
   computeCamera(p);
-  // Aim smoothing: steadier on touch (less twitchy), 1:1 on desktop mouse.
-  const desired = getAim(p);
-  const k = touch.aimUsed ? 0.22 : 1.0;
+  const desired = getAim(p), k = touch.aimUsed ? 0.22 : 1.0;
   p.aim = norm(p.aim.x + (desired.x - p.aim.x) * k, p.aim.y + (desired.y - p.aim.y) * k);
-  // Don't waste shots while sweeping the aim across: only fire once it's on target.
   const aimSettled = (p.aim.x * desired.x + p.aim.y * desired.y) > 0.95;
   if (touch.aimUsed) { reticle.x = p.x + p.aim.x * 240; reticle.y = p.y + p.aim.y * 240; }
   else { reticle.x = view.camX + mouseScreen.x / view.scale; reticle.y = view.camY + mouseScreen.y / view.scale; }
 
-  if (p.dodging) {
-    p.dodgeLeft -= dt;
-    tryMove(p, p.dodgeDir.x * 620 * dt, p.dodgeDir.y * 620 * dt);
-    if (p.dodgeLeft <= 0) p.dodging = false;
-    return;
-  }
+  if (p.dodging) { p.dodgeLeft -= dt; tryMove(p, p.dodgeDir.x * 620 * dt, p.dodgeDir.y * 620 * dt); if (p.dodgeLeft <= 0) p.dodging = false; return; }
   if (p.fireCd > 0) p.fireCd -= dt;
-  if (p.reloading) { p.reloadLeft -= dt; if (p.reloadLeft <= 0) { p.ammo = p.weapon.mag; p.reloading = false; } }
+  if (p.reloading) { p.reloadLeft -= dt; if (p.reloadLeft <= 0) { p.ammo = p.magSize; p.reloading = false; } }
 
-  const md = getMoveDir();
-  const speed = p.speed * (md.sprint ? p.sprintMul : 1);
+  const md = getMoveDir(), speed = p.speed * (md.sprint ? p.sprintMul : 1);
   if (md.moving) tryMove(p, md.x * speed * dt, md.y * speed * dt);
-
   p.noiseT -= dt;
   if (p.noiseT <= 0 && md.moving) { p.noiseT = 0.2; emitNoise(p.x, p.y, md.sprint ? 300 : 130, p); }
-
   if (keys["KeyR"]) doReload();
   if ((mouseDown || touch.aimActive) && aimSettled) tryFire();
 
@@ -429,127 +411,89 @@ function updatePlayer(dt) {
   game.pickups = game.pickups.filter((lp) => !lp.taken);
 }
 function tryFire() {
-  const p = game.player;
-  if (p.fireCd > 0 || p.reloading || p.ammo <= 0) return;
+  const p = game.player; if (p.fireCd > 0 || p.reloading || p.ammo <= 0) return;
   p.ammo--; p.fireCd = 1 / p.weapon.fireRate;
-  const spread = p.weapon.spread * Math.PI / 180;
-  const ang = Math.atan2(p.aim.y, p.aim.x) + (Math.random() * 2 - 1) * spread;
-  const dir = { x: Math.cos(ang), y: Math.sin(ang) };
-  spawnBullet(p.x + p.aim.x * 22, p.y + p.aim.y * 22, dir, p.weapon.projSpeed, p.weapon.damage, p.weapon.projColor, true);
+  const spread = p.weapon.spread * Math.PI / 180, ang = Math.atan2(p.aim.y, p.aim.x) + (Math.random() * 2 - 1) * spread, dir = { x: Math.cos(ang), y: Math.sin(ang) };
+  spawnBullet(p.x + p.aim.x * 22, p.y + p.aim.y * 22, dir, p.weapon.projSpeed, p.damage, p.weapon.projColor, true);
   if (p.ammo <= 0) { p.reloading = true; p.reloadLeft = p.weapon.reload; }
   emitNoise(p.x, p.y, p.weapon.noise, p);
 }
 
-/* ---------- ENEMIES (Patrol / Search / Chase) ------------------------------ */
-function damageEnemy(e, amount) {
-  e.hp -= amount; e.hitFlash = 0.08; e.lastKnown = { x: game.player.x, y: game.player.y };
-  e.state = "chase";
-  if (e.hp <= 0) killEnemy(e);
-}
+/* ---------- ENEMIES / BOSS ------------------------------------------------- */
+function damageEnemy(e, amount) { e.hp -= amount; e.hitFlash = 0.08; e.lastKnown = { x: game.player.x, y: game.player.y }; e.state = "chase"; if (e.hp <= 0) killEnemy(e); }
 function killEnemy(e) {
   e.dead = true;
   const drops = e.data.boss ? 3 : (Math.random() < e.data.lootChance ? 1 : 0);
-  for (let i = 0; i < drops; i++)
-    game.pickups.push({ x: e.x + (Math.random() * 40 - 20), y: e.y + (Math.random() * 40 - 20), item: LOOT[game.run.vault.loot] });
+  for (let i = 0; i < drops; i++) game.pickups.push({ x: e.x + (Math.random() * 40 - 20), y: e.y + (Math.random() * 40 - 20), item: LOOT.medkit });
 }
-function seesPlayer(e) {
-  const p = game.player;
-  return !p.dead && dist(e.x, e.y, p.x, p.y) <= e.data.sight && losClear(e.x, e.y, p.x, p.y);
-}
-function moveToward(e, tx, ty, dt) {
-  if (dist(e.x, e.y, tx, ty) < 5) return;
-  const dir = norm(tx - e.x, ty - e.y);
-  tryMove(e, dir.x * e.data.speed * dt, dir.y * e.data.speed * dt);
-}
+function seesPlayer(e) { const p = game.player; return !p.dead && dist(e.x, e.y, p.x, p.y) <= e.data.sight && losClear(e.x, e.y, p.x, p.y); }
+function moveToward(e, tx, ty, dt) { if (dist(e.x, e.y, tx, ty) < 5) return; const dir = norm(tx - e.x, ty - e.y); tryMove(e, dir.x * e.data.speed * dt, dir.y * e.data.speed * dt); }
 function fireAimed(e, speed, dmg, col, jitter) {
-  const p = game.player;
-  const ang = Math.atan2(p.y - e.y, p.x - e.x) + (Math.random() * 2 - 1) * (jitter || 0);
-  const dir = { x: Math.cos(ang), y: Math.sin(ang) };
+  const p = game.player, ang = Math.atan2(p.y - e.y, p.x - e.x) + (Math.random() * 2 - 1) * (jitter || 0), dir = { x: Math.cos(ang), y: Math.sin(ang) };
   spawnBullet(e.x + dir.x * (e.r + 6), e.y + dir.y * (e.r + 6), dir, speed, dmg, col, false);
 }
 function bossScatter(e) {
-  const p = game.player, base = Math.atan2(p.y - e.y, p.x - e.x);
-  const pellets = 9, spread = 56 * Math.PI / 180;
-  for (let i = 0; i < pellets; i++) {
-    const ang = base + (i / (pellets - 1) - 0.5) * spread, dir = { x: Math.cos(ang), y: Math.sin(ang) };
-    spawnBullet(e.x + dir.x * (e.r + 6), e.y + dir.y * (e.r + 6), dir, 500, 8, "#ff7adf", false);
-  }
+  const p = game.player, base = Math.atan2(p.y - e.y, p.x - e.x), pellets = 9, spread = 56 * Math.PI / 180;
+  for (let i = 0; i < pellets; i++) { const ang = base + (i / (pellets - 1) - 0.5) * spread, dir = { x: Math.cos(ang), y: Math.sin(ang) }; spawnBullet(e.x + dir.x * (e.r + 6), e.y + dir.y * (e.r + 6), dir, 500, 8, "#ff7adf", false); }
   emitNoise(e.x, e.y, 280, e);
 }
 function enemyAttack(e, dt) {
-  e.fireCd -= dt;
-  if (e.fireCd > 0) return;
-  if (!e.data.boss) {
-    fireAimed(e, 520, e.data.damage, "#ff7333", 0.05);
-    e.fireCd = 1 / e.data.fireRate;
-    emitNoise(e.x, e.y, 200, e);
-    return;
-  }
-  // Boss alternates: a wide scattershot fan, then a fast aimed 4-round burst.
+  e.fireCd -= dt; if (e.fireCd > 0) return;
+  if (!e.data.boss) { fireAimed(e, 520, e.data.damage, "#ff7333", 0.05); e.fireCd = 1 / e.data.fireRate; emitNoise(e.x, e.y, 200, e); return; }
   if (e.atk === 0) { bossScatter(e); e.atk = 1; e.fireCd = 1.15; }
   else { e.burst = 4; e.burstT = 0; e.atk = 0; e.fireCd = 1.3; }
 }
 function updateEnemy(e, dt) {
   const p = game.player;
   if (e.hitFlash > 0) e.hitFlash -= dt;
-  // Boss burst: fire queued aimed shots in quick succession.
-  if (e.data.boss && e.burst > 0) {
-    e.burstT -= dt;
-    if (e.burstT <= 0) { fireAimed(e, 600, 9, "#ff7adf", 0.04); e.burst--; e.burstT = 0.08; if (e.burst === 0) emitNoise(e.x, e.y, 240, e); }
-  }
+  if (e.data.boss && e.burst > 0) { e.burstT -= dt; if (e.burstT <= 0) { fireAimed(e, 600, 9, "#ff7adf", 0.04); e.burst--; e.burstT = 0.08; if (e.burst === 0) emitNoise(e.x, e.y, 240, e); } }
   if (e.state === "patrol") {
     if (seesPlayer(e)) { e.state = "chase"; e.lastKnown = { x: p.x, y: p.y }; return; }
     moveToward(e, e.target.x, e.target.y, dt);
-    if (dist(e.x, e.y, e.target.x, e.target.y) < 10) {
-      e.wait -= dt;
-      if (e.wait <= 0) { e.target = { x: e.origin.x + (Math.random() * 260 - 130), y: e.origin.y + (Math.random() * 260 - 130) }; e.wait = 0.6 + Math.random(); }
-    }
+    if (dist(e.x, e.y, e.target.x, e.target.y) < 10) { e.wait -= dt; if (e.wait <= 0) { e.target = { x: e.origin.x + (Math.random() * 260 - 130), y: e.origin.y + (Math.random() * 260 - 130) }; e.wait = 0.6 + Math.random(); } }
   } else if (e.state === "search") {
     if (seesPlayer(e)) { e.state = "chase"; e.lastKnown = { x: p.x, y: p.y }; return; }
-    navToward(e, e.lastKnown.x, e.lastKnown.y, dt);
-    e.searchT += dt;
+    navToward(e, e.lastKnown.x, e.lastKnown.y, dt); e.searchT += dt;
     if (dist(e.x, e.y, e.lastKnown.x, e.lastKnown.y) < 12 || e.searchT > 4) e.state = "patrol";
   } else {
     if (seesPlayer(e)) {
       e.lostT = 0; e.lastKnown = { x: p.x, y: p.y };
       if (dist(e.x, e.y, p.x, p.y) > e.data.attackRange) navToward(e, p.x, p.y, dt); else enemyAttack(e, dt);
-    } else {
-      e.lostT += dt; navToward(e, e.lastKnown.x, e.lastKnown.y, dt);
-      if (e.lostT > 2.5) e.state = "search";
-    }
+    } else { e.lostT += dt; navToward(e, e.lastKnown.x, e.lastKnown.y, dt); if (e.lostT > 2.5) e.state = "search"; }
   }
 }
 
 /* ---------- RUN / EXTRACTION ----------------------------------------------- */
-function endRun(extracted) { game.run.result = extracted; game.state = "result"; }
+function endRun(extracted) {
+  game.run.result = extracted;
+  let reward = 0;
+  if (extracted) { reward = Math.round(game.run.loot * game.map.lootValue); profile.fragments += reward; saveProfile(); }
+  game.run.reward = reward;
+  game.state = "result";
+}
 function unlockDoor() {
   if (!game.doorLocked) return;
-  game.doorLocked = false;
-  WALL_DATA = WALL_DATA.filter((w) => w !== game.doorWall);
-  buildNav();
+  game.doorLocked = false; WALL_DATA = WALL_DATA.filter((w) => w !== game.doorWall); buildNav();
   game.announce = "BOSS ROOM UNLOCKED"; game.announceT = 2.5;
 }
 function updateRun(dt) {
   const r = game.run;
   r.timeLeft -= dt;
-  if (r.timeLeft <= 0 && !r.alarm) {
-    r.timeLeft = 0; r.alarm = true;
-    for (const e of game.enemies) if (e.state !== "chase") { e.state = "search"; e.lastKnown = { x: game.player.x, y: game.player.y }; e.searchT = 0; }
-  }
-  // Boss-room door opens once the main-room guards are cleared, or the timer runs out.
-  if (game.doorLocked) {
-    const outsideAlive = game.enemies.some((e) => !e.bossRoom);
-    if (!outsideAlive || r.alarm) unlockDoor();
-  }
-  const p = game.player;
+  if (r.timeLeft <= 0 && !r.alarm) { r.timeLeft = 0; r.alarm = true; for (const e of game.enemies) if (e.state !== "chase") { e.state = "search"; e.lastKnown = { x: game.player.x, y: game.player.y }; e.searchT = 0; } }
+  if (game.hasBoss && game.doorLocked) { const outsideAlive = game.enemies.some((e) => !e.bossRoom); if (!outsideAlive || r.alarm) unlockDoor(); }
+  const p = game.player, ex = game.map.extraction;
   if (!r.extractDone) {
-    if (!p.dead && dist(p.x, p.y, EXTRACTION.x, EXTRACTION.y) < EXTRACTION.r) {
-      r.extractT += dt; if (r.extractT >= 3) { r.extractDone = true; endRun(true); }
-    } else r.extractT = 0;
+    if (!p.dead && dist(p.x, p.y, ex.x, ex.y) < ex.r) { r.extractT += dt; if (r.extractT >= 3) { r.extractDone = true; endRun(true); } }
+    else r.extractT = 0;
   }
 }
 
 /* ---------- UPDATE / DRAW -------------------------------------------------- */
+function computeCamera(p) {
+  const viewW = CW / view.scale, viewH = CH / view.scale;
+  view.camX = (viewW >= WORLD.w) ? (WORLD.w - viewW) / 2 : clamp(p.x - viewW / 2, 0, WORLD.w - viewW);
+  view.camY = (viewH >= WORLD.h) ? (WORLD.h - viewH) / 2 : clamp(p.y - viewH / 2, 0, WORLD.h - viewH);
+}
 function update(dt) {
   if (game.state !== "playing") return;
   updatePlayer(dt);
@@ -567,163 +511,162 @@ function update(dt) {
 
 function draw() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (game.state === "hub") { drawHub(); return; }
   ctx.fillStyle = "#0a0a0e"; ctx.fillRect(0, 0, CW, CH);
   if (game.state === "boot") return;
-  const p = game.player;
+  const p = game.player, map = game.map;
   computeCamera(p);
 
   ctx.save();
   ctx.scale(view.scale, view.scale);
   ctx.translate(-view.camX, -view.camY);
 
-  ctx.fillStyle = "#15151c"; ctx.fillRect(0, 0, WORLD.w, WORLD.h);
-  ctx.strokeStyle = "#1d1d27"; ctx.lineWidth = 1;
+  ctx.fillStyle = map.floor; ctx.fillRect(0, 0, WORLD.w, WORLD.h);
+  ctx.strokeStyle = map.grid; ctx.lineWidth = 1;
   for (let gx = 0; gx <= WORLD.w; gx += 80) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, WORLD.h); ctx.stroke(); }
   for (let gy = 0; gy <= WORLD.h; gy += 80) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(WORLD.w, gy); ctx.stroke(); }
 
-  const ex = EXTRACTION;
+  const ex = map.extraction;
   ctx.fillStyle = "rgba(50,200,110,0.18)"; ctx.beginPath(); ctx.arc(ex.x, ex.y, ex.r, 0, Math.PI * 2); ctx.fill();
   ctx.strokeStyle = "rgba(80,255,140,0.7)"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(ex.x, ex.y, ex.r, 0, Math.PI * 2); ctx.stroke();
-  if (game.run.extractT > 0 && !game.run.extractDone) {
-    const frac = clamp(game.run.extractT / 3, 0, 1);
-    ctx.strokeStyle = "#5dff8c"; ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.arc(ex.x, ex.y, ex.r + 6, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac); ctx.stroke();
-  }
+  if (game.run.extractT > 0 && !game.run.extractDone) { const frac = clamp(game.run.extractT / 3, 0, 1); ctx.strokeStyle = "#5dff8c"; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(ex.x, ex.y, ex.r + 6, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac); ctx.stroke(); }
   ctx.fillStyle = "#5dff8c"; ctx.font = "13px system-ui"; ctx.textAlign = "center"; ctx.fillText("EXTRACT", ex.x, ex.y + 4);
 
-  for (const f of game.noiseFlashes) {
-    // Subtle "sound" indicator — the radius enemies can hear you within.
-    ctx.strokeStyle = "rgba(255,235,150," + (f.life / 0.25 * 0.12).toFixed(3) + ")"; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2); ctx.stroke();
-  }
-  for (const lp of game.pickups) {
-    ctx.fillStyle = lp.item.color; ctx.fillRect(lp.x - 9, lp.y - 9, 18, 18);
-    ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5; ctx.strokeRect(lp.x - 9, lp.y - 9, 18, 18);
-  }
+  for (const f of game.noiseFlashes) { ctx.strokeStyle = "rgba(255,235,150," + (f.life / 0.25 * 0.12).toFixed(3) + ")"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2); ctx.stroke(); }
+  for (const lp of game.pickups) { ctx.fillStyle = lp.item.color; ctx.fillRect(lp.x - 9, lp.y - 9, 18, 18); ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5; ctx.strokeRect(lp.x - 9, lp.y - 9, 18, 18); }
+
   for (const w of WALL_DATA) { ctx.fillStyle = w.isDoor ? "#8a3b3b" : "#383846"; ctx.fillRect(w.x, w.y, w.w, w.h); }
-  if (game.doorLocked) {
-    ctx.fillStyle = "rgba(255,160,160,0.9)"; ctx.font = "12px system-ui"; ctx.textAlign = "center";
-    ctx.fillText("LOCKED", DOOR.x + DOOR.w / 2, DOOR.y - 8);
-  } else {
-    ctx.strokeStyle = "rgba(120,255,160,0.45)"; ctx.lineWidth = 2; ctx.strokeRect(DOOR.x, DOOR.y, DOOR.w, DOOR.h);
+  if (game.hasBoss && game.doorRect) {
+    if (game.doorLocked) { ctx.fillStyle = "rgba(255,160,160,0.9)"; ctx.font = "12px system-ui"; ctx.textAlign = "center"; ctx.fillText("LOCKED", game.doorRect.x + game.doorRect.w / 2, game.doorRect.y - 8); }
+    else { ctx.strokeStyle = "rgba(120,255,160,0.45)"; ctx.lineWidth = 2; ctx.strokeRect(game.doorRect.x, game.doorRect.y, game.doorRect.w, game.doorRect.h); }
   }
+
   for (const b of game.bullets) { ctx.fillStyle = b.color; ctx.beginPath(); ctx.arc(b.x, b.y, BULLET_R, 0, Math.PI * 2); ctx.fill(); }
-  for (const s of game.sparks) {
-    const a = clamp(s.life / 0.18, 0, 1);
-    ctx.globalAlpha = a; ctx.strokeStyle = s.col; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(s.x, s.y, 10 * (1 - a) + 3, 0, Math.PI * 2); ctx.stroke();
-    ctx.globalAlpha = 1;
-  }
+  for (const s of game.sparks) { const a = clamp(s.life / 0.18, 0, 1); ctx.globalAlpha = a; ctx.strokeStyle = s.col; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(s.x, s.y, 10 * (1 - a) + 3, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1; }
   for (const e of game.enemies) {
-    ctx.fillStyle = e.hitFlash > 0 ? "#ffffff" : e.data.color;
-    ctx.beginPath(); ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = e.hitFlash > 0 ? "#ffffff" : e.data.color; ctx.beginPath(); ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2); ctx.fill();
     if (e.data.boss) { ctx.strokeStyle = "#ffd0f5"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 3, 0, Math.PI * 2); ctx.stroke(); }
-    ctx.fillStyle = e.state === "chase" ? "#ff4040" : (e.state === "search" ? "#ffd040" : "#7a7a7a");
-    ctx.beginPath(); ctx.arc(e.x, e.y - e.r - 6, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = e.state === "chase" ? "#ff4040" : (e.state === "search" ? "#ffd040" : "#7a7a7a"); ctx.beginPath(); ctx.arc(e.x, e.y - e.r - 6, 3, 0, Math.PI * 2); ctx.fill();
   }
   ctx.fillStyle = p.dead ? "#595959" : (p.hitFlash > 0 ? "#ffd0d0" : (p.dodging ? "#9fd0ff" : "#3f99ff"));
   ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
-  if (!p.dead) {
-    // aim line + crosshair so it's obvious where shots will land
-    ctx.strokeStyle = "rgba(93,255,140,0.22)"; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(reticle.x, reticle.y); ctx.stroke();
-    drawReticle(reticle.x, reticle.y);
-  }
+  if (!p.dead) { ctx.strokeStyle = "rgba(93,255,140,0.22)"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(reticle.x, reticle.y); ctx.stroke(); drawReticle(reticle.x, reticle.y); }
 
   ctx.restore();
-
   drawHUD();
   if (isTouch) drawTouchUI();
 }
 
 function drawReticle(x, y) {
-  const col = "#5dff8c";
-  ctx.strokeStyle = col; ctx.lineWidth = 2;
+  ctx.strokeStyle = "#5dff8c"; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.arc(x, y, 13, 0, Math.PI * 2); ctx.stroke();
   ctx.beginPath();
-  ctx.moveTo(x - 22, y); ctx.lineTo(x - 8, y);
-  ctx.moveTo(x + 8, y); ctx.lineTo(x + 22, y);
-  ctx.moveTo(x, y - 22); ctx.lineTo(x, y - 8);
-  ctx.moveTo(x, y + 8); ctx.lineTo(x, y + 22);
-  ctx.stroke();
-  ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, y, 1.8, 0, Math.PI * 2); ctx.fill();
+  ctx.moveTo(x - 22, y); ctx.lineTo(x - 8, y); ctx.moveTo(x + 8, y); ctx.lineTo(x + 22, y);
+  ctx.moveTo(x, y - 22); ctx.lineTo(x, y - 8); ctx.moveTo(x, y + 8); ctx.lineTo(x, y + 22);
+  ctx.stroke(); ctx.fillStyle = "#5dff8c"; ctx.beginPath(); ctx.arc(x, y, 1.8, 0, Math.PI * 2); ctx.fill();
 }
 
 function drawHUD() {
   const p = game.player, r = game.run;
-
-  // red screen flash when the player takes a hit
-  if (game.damageFlash > 0) {
-    ctx.fillStyle = "rgba(255,40,40," + (clamp(game.damageFlash, 0, 1) * 0.32).toFixed(3) + ")";
-    ctx.fillRect(0, 0, CW, CH);
-  }
-  // boss health bar (only once the room is unlocked)
+  if (game.damageFlash > 0) { ctx.fillStyle = "rgba(255,40,40," + (clamp(game.damageFlash, 0, 1) * 0.32).toFixed(3) + ")"; ctx.fillRect(0, 0, CW, CH); }
   const boss = game.enemies.find((e) => e.data.boss);
-  if (boss && !game.doorLocked) {
+  if (boss && game.hasBoss && !game.doorLocked) {
     const bw = Math.min(CW - 40, 520), bx = (CW - bw) / 2, by = 8;
     ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(bx, by, bw, 14);
     ctx.fillStyle = "#c94dff"; ctx.fillRect(bx, by, bw * clamp(boss.hp / boss.data.maxHp, 0, 1), 14);
     ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 1; ctx.strokeRect(bx, by, bw, 14);
     ctx.fillStyle = "#fff"; ctx.font = "11px system-ui"; ctx.textAlign = "center"; ctx.fillText(boss.data.name, CW / 2, by + 11);
   }
-
   ctx.textAlign = "left"; ctx.font = "18px ui-monospace, monospace";
-  let y = 28;
-  const line = (s, col) => { ctx.fillStyle = col || "#e8e8ef"; ctx.fillText(s, 16, y); y += 24; };
+  let y = 28; const line = (s, col) => { ctx.fillStyle = col || "#e8e8ef"; ctx.fillText(s, 16, y); y += 24; };
   line("TIME  " + r.timeLeft.toFixed(1));
   if (r.alarm) line("** ALARM — enemies hunting **", "#ff6b6b");
-  line("HP    " + Math.max(0, Math.round(p.hp)));
-  line("AMMO  " + p.ammo + " / " + p.weapon.mag + (p.reloading ? "  (reloading)" : ""));
+  line("HP    " + Math.max(0, Math.round(p.hp)) + " / " + p.maxHp);
+  line("AMMO  " + p.ammo + " / " + p.magSize + (p.reloading ? "  (reloading)" : ""));
   line("LOOT  " + r.loot);
+  if (!isTouch) { ctx.fillStyle = "rgba(255,255,255,0.55)"; ctx.font = "13px system-ui"; ctx.fillText("WASD move · Shift sprint · Space dodge · Mouse aim · LMB fire · R reload", 16, CH - 18); }
+  if (game.announceT > 0) { ctx.textAlign = "center"; ctx.fillStyle = "rgba(255,220,120," + clamp(game.announceT, 0, 1).toFixed(2) + ")"; ctx.font = "bold 30px system-ui"; ctx.fillText(game.announce, CW / 2, 92); ctx.textAlign = "left"; }
 
-  if (!isTouch) {
-    ctx.fillStyle = "rgba(255,255,255,0.55)"; ctx.font = "13px system-ui";
-    ctx.fillText("WASD move · Shift sprint · Space dodge · Mouse aim · LMB fire · R reload", 16, CH - 18);
-  }
-  if (game.announceT > 0) {
-    ctx.textAlign = "center"; ctx.fillStyle = "rgba(255,220,120," + clamp(game.announceT, 0, 1).toFixed(2) + ")";
-    ctx.font = "bold 30px system-ui"; ctx.fillText(game.announce, CW / 2, 92); ctx.textAlign = "left";
-  }
   if (game.state === "result") {
-    ctx.fillStyle = "rgba(0,0,0,0.7)"; ctx.fillRect(0, 0, CW, CH);
-    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(0,0,0,0.72)"; ctx.fillRect(0, 0, CW, CH); ctx.textAlign = "center";
     ctx.fillStyle = r.result ? "#5dff8c" : "#ff6b6b"; ctx.font = "bold 52px system-ui";
-    ctx.fillText(r.result ? "EXTRACTED" : "YOU DIED", CW / 2, CH / 2 - 30);
+    ctx.fillText(r.result ? "EXTRACTED" : "YOU DIED", CW / 2, CH / 2 - 40);
     ctx.fillStyle = "#fff"; ctx.font = "22px system-ui";
-    ctx.fillText((r.result ? "Loot secured: " : "Loot lost: ") + r.loot, CW / 2, CH / 2 + 18);
-    ctx.fillStyle = "rgba(255,255,255,0.7)"; ctx.font = "17px system-ui";
-    ctx.fillText(isTouch ? "Tap to play again" : "Press ENTER or click to play again", CW / 2, CH / 2 + 64);
+    ctx.fillText(r.result ? ("Loot extracted: " + r.loot + "  →  +" + r.reward + " Fragments") : ("Loot lost: " + r.loot), CW / 2, CH / 2 + 4);
+    ctx.fillStyle = "#ffd86b"; ctx.font = "20px system-ui"; ctx.fillText("Echo Fragments: " + profile.fragments, CW / 2, CH / 2 + 38);
+    ctx.fillStyle = "rgba(255,255,255,0.7)"; ctx.font = "17px system-ui"; ctx.fillText(isTouch ? "Tap to return to hub" : "Press ENTER or click to return to hub", CW / 2, CH / 2 + 78);
+    ctx.textAlign = "left";
   }
 }
 
 function drawTouchUI() {
   if (game.state !== "playing") return;
   const ring = (base, knob, col) => {
-    ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.arc(base.x, base.y, STICK_R, 0, Math.PI * 2); ctx.stroke();
-    ctx.fillStyle = col; ctx.globalAlpha = 0.5;
-    ctx.beginPath(); ctx.arc(knob.x, knob.y, 32, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+    ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(base.x, base.y, STICK_R, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = col; ctx.globalAlpha = 0.5; ctx.beginPath(); ctx.arc(knob.x, knob.y, 32, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
   };
   if (touch.moveId !== null) ring(touch.moveOrigin, touch.moveCur, "#3f99ff");
   if (touch.aimId !== null) ring(touch.aimOrigin, touch.aimCur, "#ff6b6b");
-
   const btn = (b) => {
     ctx.fillStyle = "rgba(255,255,255,0.10)"; ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill();
     ctx.strokeStyle = "rgba(255,255,255,0.4)"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.stroke();
-    ctx.fillStyle = "rgba(255,255,255,0.8)"; ctx.font = "12px system-ui"; ctx.textAlign = "center";
-    ctx.fillText(b.label, b.x, b.y + 4);
+    ctx.fillStyle = "rgba(255,255,255,0.8)"; ctx.font = "12px system-ui"; ctx.textAlign = "center"; ctx.fillText(b.label, b.x, b.y + 4);
   };
   btn(buttons.dodge); btn(buttons.reload);
-
-  // faint zone hints when idle
   ctx.fillStyle = "rgba(255,255,255,0.18)"; ctx.font = "13px system-ui"; ctx.textAlign = "center";
   if (touch.moveId === null) ctx.fillText("MOVE", CW * 0.25, CH - 24);
   if (touch.aimId === null) ctx.fillText("AIM + FIRE", CW * 0.7, CH - 24);
 }
 
+/* ---------- HUB (map select + upgrade shop) -------------------------------- */
+function handleHubClick(x, y) {
+  for (let i = hubButtons.length - 1; i >= 0; i--) { const b = hubButtons[i]; if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) { b.action(); return; } }
+}
+function card(r) { ctx.fillStyle = "rgba(255,255,255,0.06)"; ctx.fillRect(r.x, r.y, r.w, r.h); ctx.strokeStyle = "rgba(255,255,255,0.18)"; ctx.lineWidth = 1; ctx.strokeRect(r.x, r.y, r.w, r.h); }
+function drawHub() {
+  hubButtons = [];
+  ctx.fillStyle = "#0c0c12"; ctx.fillRect(0, 0, CW, CH);
+  ctx.textAlign = "left"; ctx.fillStyle = "#fff"; ctx.font = "bold 30px system-ui"; ctx.fillText("ECHO VAULTS — HUB", 24, 44);
+  ctx.fillStyle = "#ffd86b"; ctx.font = "20px system-ui"; ctx.fillText("Echo Fragments: " + profile.fragments, 24, 74);
+
+  const twoCol = CW >= 820;
+  const colW = twoCol ? (CW - 72) / 2 : CW - 48;
+  const leftX = 24, rightX = twoCol ? 48 + colW : 24;
+
+  let lY = 100;
+  ctx.fillStyle = "#9fd0ff"; ctx.font = "bold 17px system-ui"; ctx.fillText("SELECT VAULT", leftX, lY); lY += 14;
+  for (const m of MAPS) {
+    const rect = { x: leftX, y: lY, w: colW, h: 78 }; card(rect);
+    ctx.fillStyle = "#fff"; ctx.font = "bold 18px system-ui"; ctx.fillText(m.name, rect.x + 14, rect.y + 26);
+    ctx.fillStyle = "#bbb"; ctx.font = "13px system-ui";
+    ctx.fillText("Difficulty " + "★".repeat(m.difficulty) + (m.boss ? "    ·    BOSS" : "    ·    no boss"), rect.x + 14, rect.y + 48);
+    ctx.fillStyle = "#7fd6a0"; ctx.fillText("Reward x" + m.lootValue + " / loot   ·   " + Math.round(m.raidTime) + "s", rect.x + 14, rect.y + 68);
+    ctx.fillStyle = "#6fb8ff"; ctx.font = "bold 16px system-ui"; ctx.textAlign = "right"; ctx.fillText("PLAY ▶", rect.x + rect.w - 16, rect.y + 44); ctx.textAlign = "left";
+    hubButtons.push({ x: rect.x, y: rect.y, w: rect.w, h: rect.h, action: () => startRaid(m) });
+    lY += 90;
+  }
+
+  let uY = twoCol ? 100 : lY + 10;
+  const uX = twoCol ? rightX : leftX;
+  ctx.fillStyle = "#9fd0ff"; ctx.font = "bold 17px system-ui"; ctx.fillText("UPGRADES (permanent)", uX, uY); uY += 14;
+  for (const s of UPGRADES) {
+    const rect = { x: uX, y: uY, w: colW, h: 60 }; card(rect);
+    const lvl = upgradeLevel(s.id), cost = upgradeCost(s);
+    ctx.fillStyle = "#fff"; ctx.font = "bold 15px system-ui"; ctx.fillText(s.name + "  [" + lvl + "/" + s.max + "]", rect.x + 12, rect.y + 23);
+    ctx.fillStyle = "#bbb"; ctx.font = "12px system-ui"; ctx.fillText(s.desc, rect.x + 12, rect.y + 44);
+    const btn = { x: rect.x + rect.w - 114, y: rect.y + 12, w: 102, h: 36 };
+    const afford = cost != null && profile.fragments >= cost;
+    ctx.fillStyle = cost == null ? "#3a3a44" : (afford ? "#2e7d4f" : "#5a2e2e"); ctx.fillRect(btn.x, btn.y, btn.w, btn.h);
+    ctx.fillStyle = "#fff"; ctx.font = "13px system-ui"; ctx.textAlign = "center"; ctx.fillText(cost == null ? "MAX" : ("Buy  " + cost), btn.x + btn.w / 2, btn.y + 23); ctx.textAlign = "left";
+    if (cost != null) hubButtons.push({ x: btn.x, y: btn.y, w: btn.w, h: btn.h, action: () => buyUpgrade(s) });
+    uY += 68;
+  }
+  ctx.fillStyle = "rgba(255,255,255,0.5)"; ctx.font = "12px system-ui";
+  ctx.fillText("Pick a vault to deploy. Extract to bank Fragments; die and this run's loot is lost.", 24, CH - 14);
+}
+
 /* ---------- BOOT ----------------------------------------------------------- */
 resize();
-if (isTouch) { const h = document.getElementById("hint"); if (h) h.style.display = "none"; }
 let last = (typeof performance !== "undefined" ? performance.now() : Date.now());
 function loop(now) {
   let dt = (now - last) / 1000; last = now;
@@ -731,12 +674,13 @@ function loop(now) {
   update(dt); draw();
   requestAnimationFrame(loop);
 }
-startGame();
+game.state = "hub";
 requestAnimationFrame(loop);
 
 /* ---------- test hook (no-op in the browser) ------------------------------- */
 if (typeof module !== "undefined") {
-  module.exports = { get game() { return game; }, update, draw, startGame, keys, EXTRACTION,
+  module.exports = { get game() { return game; }, get profile() { return profile; }, update, draw, startRaid, returnToHub,
+                     keys, MAPS, UPGRADES, buyUpgrade, upgradeCost, handleHubClick, get hubButtons() { return hubButtons; },
                      setMouse: (v) => { mouseDown = v; }, onTouchStart, onTouchMove, onTouchEnd, touch, buttons,
                      getMoveDir, getAim, isTouch, findPath, navCell, NAV, get WALL() { return WALL_DATA; } };
 }
