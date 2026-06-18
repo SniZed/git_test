@@ -8,7 +8,7 @@
   html, body { margin: 0; width: 100%; height: 100%; background: #0a0a0e; overflow: hidden;
                position: fixed; overscroll-behavior: none; }
   canvas { display: block; touch-action: none; -webkit-user-select: none; user-select: none;
-           -webkit-tap-highlight-color: transparent; }
+           -webkit-tap-highlight-color: transparent; cursor: crosshair; }
   #hint { position: fixed; left: 0; right: 0; bottom: 8px; text-align: center;
           color: #888; font: 12px/1.4 system-ui, sans-serif; pointer-events: none; }
 </style>
@@ -170,6 +170,7 @@ canvas.addEventListener("touchcancel", onTouchEnd, { passive: false });
 
 /* ---------- GAME STATE ----------------------------------------------------- */
 const game = { state: "boot", run: null, player: null, enemies: [], bullets: [], pickups: [], noiseFlashes: [] };
+const reticle = { x: 0, y: 0 };   // where the crosshair is drawn (= where shots go)
 
 function startGame() {
   const vault = VAULTS.industrial;
@@ -277,8 +278,9 @@ function tryDodge() {
   const p = game.player;
   if (!p || p.dead || p.dodging || p.dodgeCd > 0) return;
   const md = getMoveDir();
-  if (!md.moving) return;
-  p.dodgeDir = { x: md.x, y: md.y }; p.dodging = true; p.dodgeLeft = 0.18; p.dodgeCd = 0.6;
+  // dodge in the movement direction, or toward the aim/crosshair when standing still
+  const dir = md.moving ? { x: md.x, y: md.y } : { x: p.aim.x, y: p.aim.y };
+  p.dodgeDir = dir; p.dodging = true; p.dodgeLeft = 0.18; p.dodgeCd = 0.6;
 }
 function doReload() {
   const p = game.player;
@@ -296,6 +298,8 @@ function updatePlayer(dt) {
   if (p.dodgeCd > 0) p.dodgeCd -= dt;
   computeCamera(p);
   p.aim = getAim(p);
+  if (touch.aimUsed) { reticle.x = p.x + p.aim.x * 240; reticle.y = p.y + p.aim.y * 240; }
+  else { reticle.x = view.camX + mouseScreen.x / view.scale; reticle.y = view.camY + mouseScreen.y / view.scale; }
 
   if (p.dodging) {
     p.dodgeLeft -= dt;
@@ -454,13 +458,32 @@ function draw() {
     ctx.fillStyle = e.state === "chase" ? "#ff4040" : (e.state === "search" ? "#ffd040" : "#7a7a7a");
     ctx.beginPath(); ctx.arc(e.x, e.y - e.r - 6, 3, 0, Math.PI * 2); ctx.fill();
   }
-  ctx.fillStyle = p.dead ? "#595959" : "#3f99ff"; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
-  if (!p.dead) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + p.aim.x * 26, p.y + p.aim.y * 26); ctx.stroke(); }
+  ctx.fillStyle = p.dead ? "#595959" : (p.dodging ? "#9fd0ff" : "#3f99ff");
+  ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+  if (!p.dead) {
+    // aim line + crosshair so it's obvious where shots will land
+    ctx.strokeStyle = "rgba(93,255,140,0.22)"; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(reticle.x, reticle.y); ctx.stroke();
+    drawReticle(reticle.x, reticle.y);
+  }
 
   ctx.restore();
 
   drawHUD();
   if (isTouch) drawTouchUI();
+}
+
+function drawReticle(x, y) {
+  const col = "#5dff8c";
+  ctx.strokeStyle = col; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(x, y, 13, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x - 22, y); ctx.lineTo(x - 8, y);
+  ctx.moveTo(x + 8, y); ctx.lineTo(x + 22, y);
+  ctx.moveTo(x, y - 22); ctx.lineTo(x, y - 8);
+  ctx.moveTo(x, y + 8); ctx.lineTo(x, y + 22);
+  ctx.stroke();
+  ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, y, 1.8, 0, Math.PI * 2); ctx.fill();
 }
 
 function drawHUD() {
