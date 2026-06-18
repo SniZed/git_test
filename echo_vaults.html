@@ -34,6 +34,10 @@ const ENEMIES = {
   guard: { name: "Vault Guard", maxHp: 28, speed: 130, damage: 9, attackRange: 340,
            fireRate: 2.6, hearing: 300, sight: 420, color: "#d95252", lootChance: 0.5 }
 };
+const BOSSES = {
+  warden: { name: "Vault Warden", maxHp: 200, speed: 85, damage: 9, attackRange: 520,
+            fireRate: 1, hearing: 400, sight: 760, color: "#c94dff", lootChance: 1, radius: 26, boss: true }
+};
 const LOOT = { medkit: { name: "Medkit", color: "#4de372", value: 120 } };
 const VAULTS = {
   industrial: { name: "Industrial Vault 01", raidTime: 75, loot: "medkit", enemy: "guard" }
@@ -49,9 +53,9 @@ const WALL_DATA = [
   { x: 950, y: 680, w: 240, h: 40 }
 ];
 const ENEMY_SPAWNS = [
-  { x: 1000, y: 300 }, { x: 500, y: 200 }, { x: 1150, y: 750 },
-  { x: 350, y: 470 }, { x: 800, y: 820 }
+  { x: 1000, y: 300 }, { x: 500, y: 200 }, { x: 1150, y: 750 }, { x: 800, y: 820 }
 ];
+const BOSS_SPAWN = { x: 700, y: 250 };
 const LOOT_SPAWNS = [
   { x: 250, y: 320 }, { x: 920, y: 250 }, { x: 1120, y: 520 },
   { x: 450, y: 760 }, { x: 700, y: 640 }
@@ -169,7 +173,7 @@ canvas.addEventListener("touchend", onTouchEnd, { passive: false });
 canvas.addEventListener("touchcancel", onTouchEnd, { passive: false });
 
 /* ---------- GAME STATE ----------------------------------------------------- */
-const game = { state: "boot", run: null, player: null, enemies: [], bullets: [], pickups: [], noiseFlashes: [] };
+const game = { state: "boot", run: null, player: null, enemies: [], bullets: [], pickups: [], noiseFlashes: [], sparks: [], damageFlash: 0 };
 const reticle = { x: 0, y: 0 };   // where the crosshair is drawn (= where shots go)
 
 function startGame() {
@@ -177,20 +181,21 @@ function startGame() {
   game.run = { vault, timeLeft: vault.raidTime, loot: 0, alarm: false, extractT: 0, extractDone: false };
   game.player = makePlayer();
   game.enemies = ENEMY_SPAWNS.map((s) => makeEnemy(ENEMIES[vault.enemy], s.x, s.y));
+  game.enemies.push(makeEnemy(BOSSES.warden, BOSS_SPAWN.x, BOSS_SPAWN.y));
   game.bullets = [];
   game.pickups = LOOT_SPAWNS.map((s) => ({ x: s.x, y: s.y, item: LOOT[vault.loot] }));
-  game.noiseFlashes = [];
+  game.noiseFlashes = []; game.sparks = []; game.damageFlash = 0;
   game.state = "playing";
 }
 function makePlayer() {
   const wpn = WEAPONS.pistol;
   return { x: PLAYER_SPAWN.x, y: PLAYER_SPAWN.y, r: 14, hp: 100, maxHp: 100, speed: 220, sprintMul: 1.6,
            aim: { x: 1, y: 0 }, weapon: wpn, fireCd: 0, ammo: wpn.mag, reloading: false, reloadLeft: 0,
-           dodging: false, dodgeLeft: 0, dodgeCd: 0, dodgeDir: { x: 0, y: 0 }, noiseT: 0, dead: false };
+           dodging: false, dodgeLeft: 0, dodgeCd: 0, dodgeDir: { x: 0, y: 0 }, noiseT: 0, hitFlash: 0, dead: false };
 }
 function makeEnemy(data, x, y) {
-  return { x, y, r: 13, data, hp: data.maxHp, state: "patrol", origin: { x, y }, target: { x, y },
-           wait: 0, lastKnown: { x, y }, searchT: 0, lostT: 0, fireCd: 0 };
+  return { x, y, r: data.radius || 13, data, hp: data.maxHp, state: "patrol", origin: { x, y }, target: { x, y },
+           wait: 0, lastKnown: { x, y }, searchT: 0, lostT: 0, fireCd: 0, hitFlash: 0, atk: 0, burst: 0, burstT: 0 };
 }
 
 /* ---------- MATH / COLLISION ----------------------------------------------- */
@@ -259,6 +264,7 @@ function emitNoise(x, y, radius, source) {
 function spawnBullet(x, y, dir, speed, dmg, color, fromPlayer) {
   game.bullets.push({ x, y, vx: dir.x * speed, vy: dir.y * speed, dmg, color, fromPlayer, life: 2 });
 }
+function addSpark(x, y, col) { game.sparks.push({ x, y, life: 0.18, col }); }
 function updateBullets(dt) {
   const p = game.player;
   for (const b of game.bullets) {
@@ -267,8 +273,8 @@ function updateBullets(dt) {
     for (const w of WALL_DATA) if (pointInWall(b.x, b.y, w)) { b.dead = true; break; }
     if (b.dead) continue;
     if (b.fromPlayer) {
-      for (const e of game.enemies) if (dist(b.x, b.y, e.x, e.y) < e.r + BULLET_R) { damageEnemy(e, b.dmg); b.dead = true; break; }
-    } else if (!p.dead && dist(b.x, b.y, p.x, p.y) < p.r + BULLET_R) { damagePlayer(b.dmg); b.dead = true; }
+      for (const e of game.enemies) if (dist(b.x, b.y, e.x, e.y) < e.r + BULLET_R) { addSpark(b.x, b.y, "#ffffff"); damageEnemy(e, b.dmg); b.dead = true; break; }
+    } else if (!p.dead && dist(b.x, b.y, p.x, p.y) < p.r + BULLET_R) { addSpark(b.x, b.y, "#ff5a5a"); damagePlayer(b.dmg); b.dead = true; }
   }
   game.bullets = game.bullets.filter((b) => !b.dead);
 }
@@ -290,17 +296,21 @@ function damagePlayer(amount) {
   const p = game.player;
   if (p.dead || p.dodging) return;
   p.hp -= amount;
+  p.hitFlash = 0.12; game.damageFlash = 0.6;
   if (p.hp <= 0) { p.hp = 0; p.dead = true; endRun(false); }
 }
 function updatePlayer(dt) {
   const p = game.player;
   if (p.dead) return;
   if (p.dodgeCd > 0) p.dodgeCd -= dt;
+  if (p.hitFlash > 0) p.hitFlash -= dt;
   computeCamera(p);
   // Aim smoothing: steadier on touch (less twitchy), 1:1 on desktop mouse.
   const desired = getAim(p);
   const k = touch.aimUsed ? 0.22 : 1.0;
   p.aim = norm(p.aim.x + (desired.x - p.aim.x) * k, p.aim.y + (desired.y - p.aim.y) * k);
+  // Don't waste shots while sweeping the aim across: only fire once it's on target.
+  const aimSettled = (p.aim.x * desired.x + p.aim.y * desired.y) > 0.95;
   if (touch.aimUsed) { reticle.x = p.x + p.aim.x * 240; reticle.y = p.y + p.aim.y * 240; }
   else { reticle.x = view.camX + mouseScreen.x / view.scale; reticle.y = view.camY + mouseScreen.y / view.scale; }
 
@@ -321,7 +331,7 @@ function updatePlayer(dt) {
   if (p.noiseT <= 0 && md.moving) { p.noiseT = 0.2; emitNoise(p.x, p.y, md.sprint ? 300 : 130, p); }
 
   if (keys["KeyR"]) doReload();
-  if (mouseDown || touch.aimActive) tryFire();
+  if ((mouseDown || touch.aimActive) && aimSettled) tryFire();
 
   for (const lp of game.pickups) if (!lp.taken && dist(p.x, p.y, lp.x, lp.y) < p.r + 12) { lp.taken = true; game.run.loot++; }
   game.pickups = game.pickups.filter((lp) => !lp.taken);
@@ -340,13 +350,15 @@ function tryFire() {
 
 /* ---------- ENEMIES (Patrol / Search / Chase) ------------------------------ */
 function damageEnemy(e, amount) {
-  e.hp -= amount; e.lastKnown = { x: game.player.x, y: game.player.y };
+  e.hp -= amount; e.hitFlash = 0.08; e.lastKnown = { x: game.player.x, y: game.player.y };
   e.state = "chase";
   if (e.hp <= 0) killEnemy(e);
 }
 function killEnemy(e) {
   e.dead = true;
-  if (Math.random() < e.data.lootChance) game.pickups.push({ x: e.x, y: e.y, item: LOOT[game.run.vault.loot] });
+  const drops = e.data.boss ? 3 : (Math.random() < e.data.lootChance ? 1 : 0);
+  for (let i = 0; i < drops; i++)
+    game.pickups.push({ x: e.x + (Math.random() * 40 - 20), y: e.y + (Math.random() * 40 - 20), item: LOOT[game.run.vault.loot] });
 }
 function seesPlayer(e) {
   const p = game.player;
@@ -357,16 +369,42 @@ function moveToward(e, tx, ty, dt) {
   const dir = norm(tx - e.x, ty - e.y);
   tryMove(e, dir.x * e.data.speed * dt, dir.y * e.data.speed * dt);
 }
-function enemyShoot(e, dt) {
+function fireAimed(e, speed, dmg, col, jitter) {
+  const p = game.player;
+  const ang = Math.atan2(p.y - e.y, p.x - e.x) + (Math.random() * 2 - 1) * (jitter || 0);
+  const dir = { x: Math.cos(ang), y: Math.sin(ang) };
+  spawnBullet(e.x + dir.x * (e.r + 6), e.y + dir.y * (e.r + 6), dir, speed, dmg, col, false);
+}
+function bossScatter(e) {
+  const p = game.player, base = Math.atan2(p.y - e.y, p.x - e.x);
+  const pellets = 7, spread = 50 * Math.PI / 180;
+  for (let i = 0; i < pellets; i++) {
+    const ang = base + (i / (pellets - 1) - 0.5) * spread, dir = { x: Math.cos(ang), y: Math.sin(ang) };
+    spawnBullet(e.x + dir.x * (e.r + 6), e.y + dir.y * (e.r + 6), dir, 470, 8, "#ff7adf", false);
+  }
+  emitNoise(e.x, e.y, 280, e);
+}
+function enemyAttack(e, dt) {
   e.fireCd -= dt;
   if (e.fireCd > 0) return;
-  e.fireCd = 1 / e.data.fireRate;
-  const p = game.player, dir = norm(p.x - e.x, p.y - e.y);
-  spawnBullet(e.x + dir.x * 18, e.y + dir.y * 18, dir, 520, e.data.damage, "#ff7333", false);
-  emitNoise(e.x, e.y, 200, e);
+  if (!e.data.boss) {
+    fireAimed(e, 520, e.data.damage, "#ff7333", 0.05);
+    e.fireCd = 1 / e.data.fireRate;
+    emitNoise(e.x, e.y, 200, e);
+    return;
+  }
+  // Boss alternates: a wide scattershot fan, then a fast aimed 3-round burst.
+  if (e.atk === 0) { bossScatter(e); e.atk = 1; e.fireCd = 1.7; }
+  else { e.burst = 3; e.burstT = 0; e.atk = 0; e.fireCd = 1.9; }
 }
 function updateEnemy(e, dt) {
   const p = game.player;
+  if (e.hitFlash > 0) e.hitFlash -= dt;
+  // Boss burst: fire queued aimed shots in quick succession.
+  if (e.data.boss && e.burst > 0) {
+    e.burstT -= dt;
+    if (e.burstT <= 0) { fireAimed(e, 580, 9, "#ff7adf", 0.04); e.burst--; e.burstT = 0.1; if (e.burst === 0) emitNoise(e.x, e.y, 240, e); }
+  }
   if (e.state === "patrol") {
     if (seesPlayer(e)) { e.state = "chase"; e.lastKnown = { x: p.x, y: p.y }; return; }
     moveToward(e, e.target.x, e.target.y, dt);
@@ -382,7 +420,7 @@ function updateEnemy(e, dt) {
   } else {
     if (seesPlayer(e)) {
       e.lostT = 0; e.lastKnown = { x: p.x, y: p.y };
-      if (dist(e.x, e.y, p.x, p.y) > e.data.attackRange) moveToward(e, p.x, p.y, dt); else enemyShoot(e, dt);
+      if (dist(e.x, e.y, p.x, p.y) > e.data.attackRange) moveToward(e, p.x, p.y, dt); else enemyAttack(e, dt);
     } else {
       e.lostT += dt; moveToward(e, e.lastKnown.x, e.lastKnown.y, dt);
       if (e.lostT > 2.5) e.state = "search";
@@ -417,6 +455,9 @@ function update(dt) {
   updateRun(dt);
   for (const f of game.noiseFlashes) f.life -= dt;
   game.noiseFlashes = game.noiseFlashes.filter((f) => f.life > 0);
+  for (const s of game.sparks) s.life -= dt;
+  game.sparks = game.sparks.filter((s) => s.life > 0);
+  if (game.damageFlash > 0) game.damageFlash -= dt * 2.2;
 }
 
 function draw() {
@@ -456,12 +497,20 @@ function draw() {
   }
   ctx.fillStyle = "#383846"; for (const w of WALL_DATA) ctx.fillRect(w.x, w.y, w.w, w.h);
   for (const b of game.bullets) { ctx.fillStyle = b.color; ctx.beginPath(); ctx.arc(b.x, b.y, BULLET_R, 0, Math.PI * 2); ctx.fill(); }
+  for (const s of game.sparks) {
+    const a = clamp(s.life / 0.18, 0, 1);
+    ctx.globalAlpha = a; ctx.strokeStyle = s.col; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(s.x, s.y, 10 * (1 - a) + 3, 0, Math.PI * 2); ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
   for (const e of game.enemies) {
-    ctx.fillStyle = e.data.color; ctx.beginPath(); ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = e.hitFlash > 0 ? "#ffffff" : e.data.color;
+    ctx.beginPath(); ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2); ctx.fill();
+    if (e.data.boss) { ctx.strokeStyle = "#ffd0f5"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 3, 0, Math.PI * 2); ctx.stroke(); }
     ctx.fillStyle = e.state === "chase" ? "#ff4040" : (e.state === "search" ? "#ffd040" : "#7a7a7a");
     ctx.beginPath(); ctx.arc(e.x, e.y - e.r - 6, 3, 0, Math.PI * 2); ctx.fill();
   }
-  ctx.fillStyle = p.dead ? "#595959" : (p.dodging ? "#9fd0ff" : "#3f99ff");
+  ctx.fillStyle = p.dead ? "#595959" : (p.hitFlash > 0 ? "#ffd0d0" : (p.dodging ? "#9fd0ff" : "#3f99ff"));
   ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
   if (!p.dead) {
     // aim line + crosshair so it's obvious where shots will land
@@ -491,6 +540,22 @@ function drawReticle(x, y) {
 
 function drawHUD() {
   const p = game.player, r = game.run;
+
+  // red screen flash when the player takes a hit
+  if (game.damageFlash > 0) {
+    ctx.fillStyle = "rgba(255,40,40," + (clamp(game.damageFlash, 0, 1) * 0.32).toFixed(3) + ")";
+    ctx.fillRect(0, 0, CW, CH);
+  }
+  // boss health bar
+  const boss = game.enemies.find((e) => e.data.boss);
+  if (boss) {
+    const bw = Math.min(CW - 40, 520), bx = (CW - bw) / 2, by = 8;
+    ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(bx, by, bw, 14);
+    ctx.fillStyle = "#c94dff"; ctx.fillRect(bx, by, bw * clamp(boss.hp / boss.data.maxHp, 0, 1), 14);
+    ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 1; ctx.strokeRect(bx, by, bw, 14);
+    ctx.fillStyle = "#fff"; ctx.font = "11px system-ui"; ctx.textAlign = "center"; ctx.fillText(boss.data.name, CW / 2, by + 11);
+  }
+
   ctx.textAlign = "left"; ctx.font = "18px ui-monospace, monospace";
   let y = 28;
   const line = (s, col) => { ctx.fillStyle = col || "#e8e8ef"; ctx.fillText(s, 16, y); y += 24; };
