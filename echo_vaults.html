@@ -64,7 +64,7 @@ const BULLET_R = 4;
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 let CW = 0, CH = 0, dpr = 1;
-const view = { scale: 1 };                 // world zoom (adapts to screen size)
+const view = { scale: 1, camX: 0, camY: 0 }; // world zoom + camera top-left (adapts to screen size)
 const STICK_R = 70;                        // touch joystick radius (css px)
 const buttons = { dodge: {}, reload: {} };
 
@@ -220,6 +220,13 @@ function losClear(ax, ay, bx, by) {
   return true;
 }
 
+/* ---------- CAMERA (clamped to world bounds so the screen is always full) -- */
+function computeCamera(p) {
+  const viewW = CW / view.scale, viewH = CH / view.scale;
+  view.camX = (viewW >= WORLD.w) ? (WORLD.w - viewW) / 2 : clamp(p.x - viewW / 2, 0, WORLD.w - viewW);
+  view.camY = (viewH >= WORLD.h) ? (WORLD.h - viewH) / 2 : clamp(p.y - viewH / 2, 0, WORLD.h - viewH);
+}
+
 /* ---------- INPUT INTENTS (unify keyboard/mouse + touch) ------------------- */
 function getMoveDir() {
   let ix = 0, iy = 0;
@@ -234,8 +241,8 @@ function getMoveDir() {
 }
 function getAim(p) {
   if (touch.aimUsed) return touch.aimVec;
-  const mwx = (mouseScreen.x - CW / 2) / view.scale + p.x;
-  const mwy = (mouseScreen.y - CH / 2) / view.scale + p.y;
+  const mwx = view.camX + mouseScreen.x / view.scale;
+  const mwy = view.camY + mouseScreen.y / view.scale;
   const a = norm(mwx - p.x, mwy - p.y);
   return (a.x || a.y) ? a : p.aim;
 }
@@ -287,6 +294,7 @@ function updatePlayer(dt) {
   const p = game.player;
   if (p.dead) return;
   if (p.dodgeCd > 0) p.dodgeCd -= dt;
+  computeCamera(p);
   p.aim = getAim(p);
 
   if (p.dodging) {
@@ -409,11 +417,11 @@ function draw() {
   ctx.fillStyle = "#0a0a0e"; ctx.fillRect(0, 0, CW, CH);
   if (game.state === "boot") return;
   const p = game.player;
+  computeCamera(p);
 
   ctx.save();
-  ctx.translate(CW / 2, CH / 2);
   ctx.scale(view.scale, view.scale);
-  ctx.translate(-p.x, -p.y);
+  ctx.translate(-view.camX, -view.camY);
 
   ctx.fillStyle = "#15151c"; ctx.fillRect(0, 0, WORLD.w, WORLD.h);
   ctx.strokeStyle = "#1d1d27"; ctx.lineWidth = 1;
@@ -431,7 +439,8 @@ function draw() {
   ctx.fillStyle = "#5dff8c"; ctx.font = "13px system-ui"; ctx.textAlign = "center"; ctx.fillText("EXTRACT", ex.x, ex.y + 4);
 
   for (const f of game.noiseFlashes) {
-    ctx.strokeStyle = "rgba(255,230,120," + (f.life / 0.25 * 0.4).toFixed(3) + ")"; ctx.lineWidth = 2;
+    // Subtle "sound" indicator — the radius enemies can hear you within.
+    ctx.strokeStyle = "rgba(255,235,150," + (f.life / 0.25 * 0.12).toFixed(3) + ")"; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2); ctx.stroke();
   }
   for (const lp of game.pickups) {
