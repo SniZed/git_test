@@ -50,51 +50,29 @@ const OUTER = [
   { x: 0, y: 0, w: 1400, h: 40 }, { x: 0, y: 960, w: 1400, h: 40 },
   { x: 0, y: 0, w: 40, h: 1000 }, { x: 1360, y: 0, w: 40, h: 1000 }
 ];
-// Three vaults with distinct layouts. boss = null means a pure loot run.
+// Vault profiles — the actual layout is GENERATED per raid (see generateLayout).
 const MAPS = [
-  {
-    id: "industrial", name: "Industrial Vault", floor: "#15151c", grid: "#1d1d27",
-    difficulty: 2, lootValue: 25, raidTime: 75,
-    playerSpawn: { x: 120, y: 860 }, extraction: { x: 140, y: 200, r: 55 },
-    walls: OUTER.concat([
-      { x: 300, y: 250, w: 220, h: 40 }, { x: 820, y: 200, w: 40, h: 240 },
-      { x: 560, y: 520, w: 180, h: 40 }, { x: 300, y: 650, w: 40, h: 200 },
-      { x: 1000, y: 80, w: 44, h: 370 }, { x: 1000, y: 570, w: 44, h: 350 },
-      { x: 1180, y: 320, w: 40, h: 180 }, { x: 1120, y: 700, w: 170, h: 40 }
-    ]),
-    enemies: [ { x: 760, y: 300 }, { x: 480, y: 200 }, { x: 820, y: 780 }, { x: 320, y: 320 } ],
-    loot: [ { x: 250, y: 320 }, { x: 700, y: 250 }, { x: 450, y: 760 }, { x: 620, y: 600 } ],
-    boss: { id: "warden", spawn: { x: 1200, y: 500 }, door: { x: 1000, y: 450, w: 44, h: 120 },
-            guards: [ { x: 1110, y: 250 }, { x: 1270, y: 760 } ], loot: [ { x: 1200, y: 300 }, { x: 1280, y: 560 } ] }
-  },
-  {
-    id: "overgrown", name: "Overgrown Depot", floor: "#121a14", grid: "#1b2a1e",
-    difficulty: 1, lootValue: 16, raidTime: 65,
-    playerSpawn: { x: 120, y: 500 }, extraction: { x: 1250, y: 120, r: 55 },
-    walls: OUTER.concat([
-      { x: 300, y: 200, w: 120, h: 120 }, { x: 700, y: 300, w: 140, h: 40 }, { x: 980, y: 200, w: 40, h: 220 },
-      { x: 420, y: 600, w: 200, h: 40 }, { x: 850, y: 640, w: 120, h: 120 }, { x: 1080, y: 700, w: 40, h: 160 },
-      { x: 560, y: 800, w: 160, h: 40 }
-    ]),
-    enemies: [ { x: 420, y: 320 }, { x: 800, y: 250 }, { x: 1120, y: 360 }, { x: 520, y: 720 }, { x: 980, y: 520 }, { x: 1180, y: 820 } ],
-    loot: [ { x: 320, y: 440 }, { x: 760, y: 240 }, { x: 1040, y: 300 }, { x: 470, y: 760 }, { x: 900, y: 800 }, { x: 1220, y: 600 }, { x: 640, y: 520 } ],
-    boss: null
-  },
-  {
-    id: "arcane", name: "Arcane Lab", floor: "#16121f", grid: "#241b2e",
-    difficulty: 3, lootValue: 34, raidTime: 80,
-    playerSpawn: { x: 140, y: 880 }, extraction: { x: 1250, y: 880, r: 55 },
-    walls: OUTER.concat([
-      { x: 80, y: 360, w: 560, h: 44 }, { x: 760, y: 360, w: 560, h: 44 },
-      { x: 300, y: 560, w: 200, h: 40 }, { x: 800, y: 600, w: 40, h: 220 },
-      { x: 540, y: 790, w: 200, h: 40 }, { x: 1060, y: 560, w: 40, h: 200 }
-    ]),
-    enemies: [ { x: 400, y: 620 }, { x: 900, y: 520 }, { x: 1150, y: 820 }, { x: 320, y: 840 }, { x: 700, y: 720 } ],
-    loot: [ { x: 250, y: 620 }, { x: 700, y: 560 }, { x: 1120, y: 660 }, { x: 520, y: 880 }, { x: 960, y: 800 } ],
-    boss: { id: "warden", spawn: { x: 700, y: 200 }, door: { x: 640, y: 360, w: 120, h: 44 },
-            guards: [ { x: 300, y: 200 }, { x: 1050, y: 220 } ], loot: [ { x: 320, y: 290 }, { x: 1040, y: 150 } ] }
-  }
+  { id: "industrial", name: "Industrial Vault", floor: "#15151c", grid: "#1d1d27",
+    difficulty: 2, lootValue: 25, raidTime: 75, boss: "warden", enemyBase: 5, lootBase: 6, coverBase: 8 },
+  { id: "overgrown", name: "Overgrown Depot", floor: "#121a14", grid: "#1b2a1e",
+    difficulty: 1, lootValue: 16, raidTime: 65, boss: null, enemyBase: 6, lootBase: 8, coverBase: 7 },
+  { id: "arcane", name: "Arcane Lab", floor: "#16121f", grid: "#241b2e",
+    difficulty: 3, lootValue: 34, raidTime: 80, boss: "warden", enemyBase: 6, lootBase: 6, coverBase: 11 }
 ];
+// Run modifiers — variety + risk/reward, chosen in the hub.
+const MODIFIERS = [
+  { id: "none", name: "Standard", desc: "No modifier", rewardMult: 1, apply: () => {} },
+  { id: "corrupted", name: "Corrupted", desc: "+60% enemies · +30% loot", rewardMult: 1.4, apply: (m) => { m.enemyMult = 1.6; m.lootMult = 1.3; } },
+  { id: "high_alert", name: "High Alert", desc: "Half timer · faster foes", rewardMult: 1.35, apply: (m) => { m.timeMult = 0.5; m.enemySpeedMult = 1.2; m.enemyFireMult = 1.25; } },
+  { id: "glass", name: "Glass Protocol", desc: "Half HP · big payout", rewardMult: 1.7, apply: (m) => { m.playerHpMult = 0.5; } },
+  { id: "rich", name: "Bountiful", desc: "+70% loot spawns", rewardMult: 1.0, apply: (m) => { m.lootMult = 1.7; } }
+];
+let selectedMod = 0;
+function computeMods(mod) {
+  const m = { enemyMult: 1, lootMult: 1, timeMult: 1, enemySpeedMult: 1, enemyFireMult: 1, playerHpMult: 1, rewardMult: mod.rewardMult || 1 };
+  if (mod.apply) mod.apply(m);
+  return m;
+}
 
 let WALL_DATA = [];
 const BULLET_R = 5;
@@ -211,39 +189,41 @@ canvas.addEventListener("touchend", onTouchEnd, { passive: false });
 canvas.addEventListener("touchcancel", onTouchEnd, { passive: false });
 
 /* ---------- GAME STATE ----------------------------------------------------- */
-const game = { state: "boot", map: null, run: null, player: null, enemies: [], bullets: [], pickups: [],
-               noiseFlashes: [], sparks: [], damageFlash: 0, hasBoss: false, doorLocked: false, doorWall: null,
-               doorRect: null, announce: "", announceT: 0 };
+const game = { state: "boot", map: null, mod: null, mods: null, run: null, player: null, enemies: [], bullets: [], pickups: [],
+               spawn: null, extraction: null, noiseFlashes: [], sparks: [], damageFlash: 0, hasBoss: false, doorLocked: false,
+               doorWall: null, doorRect: null, announce: "", announceT: 0 };
 const reticle = { x: 0, y: 0 };
 let hubButtons = [];
 
 function returnToHub() { game.state = "hub"; }
 
 function startRaid(map) {
-  game.map = map;
-  WALL_DATA = map.walls.map((w) => ({ ...w }));
-  game.hasBoss = !!map.boss; game.doorLocked = false; game.doorWall = null; game.doorRect = null;
-  if (map.boss) {
-    const door = { ...map.boss.door, isDoor: true };
-    WALL_DATA.push(door); game.doorWall = door; game.doorRect = { ...map.boss.door }; game.doorLocked = true;
+  const mod = MODIFIERS[selectedMod], mods = computeMods(mod);
+  game.map = map; game.mod = mod; game.mods = mods;
+  const L = generateLayout(map, mods);           // sets WALL_DATA + nav, returns layout
+  game.spawn = L.spawn; game.extraction = L.extraction;
+  game.hasBoss = !!L.boss; game.doorLocked = false; game.doorWall = null; game.doorRect = null;
+  if (L.boss) {
+    const door = { ...L.boss.door, isDoor: true };
+    WALL_DATA.push(door); buildNav(); game.doorWall = door; game.doorRect = { ...L.boss.door }; game.doorLocked = true;
   }
-  buildNav();
-  game.run = { map, timeLeft: map.raidTime, loot: 0, alarm: false, extractT: 0, extractDone: false, reward: 0 };
+  game.run = { map, timeLeft: map.raidTime * mods.timeMult, loot: 0, alarm: false, extractT: 0, extractDone: false, reward: 0, started: false };
   game.player = makePlayer();
-  game.enemies = map.enemies.map((s) => makeEnemy(ENEMIES.guard, s.x, s.y));
-  if (map.boss) {
-    for (const s of map.boss.guards) { const gd = makeEnemy(ENEMIES.guard, s.x, s.y); gd.bossRoom = true; game.enemies.push(gd); }
-    const b = makeEnemy(BOSSES[map.boss.id], map.boss.spawn.x, map.boss.spawn.y); b.bossRoom = true; game.enemies.push(b);
+  game.enemies = L.enemies.map((s) => makeEnemy(ENEMIES.guard, s.x, s.y));
+  if (L.boss) {
+    for (const s of L.boss.guards) { const gd = makeEnemy(ENEMIES.guard, s.x, s.y); gd.bossRoom = true; game.enemies.push(gd); }
+    const b = makeEnemy(BOSSES[L.boss.id], L.boss.spawn.x, L.boss.spawn.y); b.bossRoom = true; game.enemies.push(b);
   }
-  game.pickups = map.loot.map((s) => ({ x: s.x, y: s.y, item: LOOT.medkit }));
-  if (map.boss) for (const s of map.boss.loot) game.pickups.push({ x: s.x, y: s.y, item: LOOT.medkit });
+  for (const e of game.enemies) { e.speedMult = mods.enemySpeedMult; e.fireMult = mods.enemyFireMult; }
+  game.pickups = L.loot.map((s) => ({ x: s.x, y: s.y, item: LOOT.medkit }));
+  if (L.boss) for (const s of L.boss.loot) game.pickups.push({ x: s.x, y: s.y, item: LOOT.medkit });
   game.bullets = []; game.noiseFlashes = []; game.sparks = []; game.damageFlash = 0; game.announce = ""; game.announceT = 0;
   game.state = "playing";
 }
 
 function makePlayer() {
-  const wpn = WEAPONS.pistol, u = profile.upgrades, sp = game.map.playerSpawn;
-  const maxHp = 100 + u.maxHp * 25;
+  const wpn = WEAPONS.pistol, u = profile.upgrades, sp = game.spawn, hpMult = (game.mods && game.mods.playerHpMult) || 1;
+  const maxHp = Math.round((100 + u.maxHp * 25) * hpMult);
   const p = {
     x: sp.x, y: sp.y, r: 14, hp: maxHp, maxHp, speed: 220 * (1 + u.speed * 0.08), sprintMul: 1.6,
     aim: { x: 1, y: 0 }, weapon: wpn, damage: wpn.damage + u.damage * 4, magSize: wpn.mag + u.mag * 4,
@@ -257,7 +237,7 @@ function makePlayer() {
 function makeEnemy(data, x, y) {
   return { x, y, r: data.radius || 13, data, hp: data.maxHp, state: "patrol", origin: { x, y }, target: { x, y },
            wait: 0, lastKnown: { x, y }, searchT: 0, lostT: 0, fireCd: 0, hitFlash: 0, atk: 0, burst: 0, burstT: 0,
-           bossRoom: false, path: null, pathT: 0, pathIndex: 1, pathGoal: { x: 0, y: 0 } };
+           bossRoom: false, speedMult: 1, fireMult: 1, path: null, pathT: 0, pathIndex: 1, pathGoal: { x: 0, y: 0 } };
 }
 
 /* ---------- MATH / COLLISION ----------------------------------------------- */
@@ -337,6 +317,94 @@ function navToward(e, tx, ty, dt) {
     if (dist(e.x, e.y, wp.x, wp.y) < NAV.cell * 0.7) { e.pathIndex++; wp = e.path[Math.min(e.pathIndex, e.path.length - 1)]; }
     moveToward(e, wp.x, wp.y, dt);
   } else moveToward(e, tx, ty, dt);
+}
+
+/* ---------- LAYOUT GENERATION (semi-procedural per raid) ------------------- */
+function inAnyWall(x, y, rad) { for (const w of WALL_DATA) if (circleRect(x, y, rad, w)) return true; return false; }
+function rectsTouch(a, b, pad) { return a.x - pad < b.x + b.w && a.x + a.w + pad > b.x && a.y - pad < b.y + b.h && a.y + a.h + pad > b.y; }
+function randFree(spawn, avoid, minFromSpawn, tries) {
+  for (let i = 0; i < (tries || 60); i++) {
+    const x = 100 + Math.random() * (WORLD.w - 200), y = 100 + Math.random() * (WORLD.h - 200);
+    if (avoid && x > avoid.x - 30 && x < avoid.x + avoid.w + 30 && y > avoid.y - 30 && y < avoid.y + avoid.h + 30) continue;
+    if (inAnyWall(x, y, 20)) continue;
+    if (minFromSpawn && dist(x, y, spawn.x, spawn.y) < minFromSpawn) continue;
+    if (!findPath(spawn.x, spawn.y, x, y)) continue;
+    return { x, y };
+  }
+  return null;
+}
+function carveBossRoom(walls) {
+  const rw = 300, rh = 320, corner = (Math.random() * 4) | 0, T = 44;
+  let rx, ry, ivx, ihy;
+  if (corner === 0) { rx = 40; ry = 40; ivx = rx + rw; ihy = ry + rh; }
+  else if (corner === 1) { rx = 1360 - rw; ry = 40; ivx = rx; ihy = ry + rh; }
+  else if (corner === 2) { rx = 40; ry = 960 - rh; ivx = rx + rw; ihy = ry; }
+  else { rx = 1360 - rw; ry = 960 - rh; ivx = rx; ihy = ry; }
+  const room = { x: rx, y: ry, w: rw, h: rh }, gap = 120; let door;
+  if (Math.random() < 0.5) {                 // door on the vertical inner wall
+    const gy = clamp(ry + rh / 2 - gap / 2, ry + 20, ry + rh - 20 - gap);
+    walls.push({ x: ivx - T / 2, y: ry, w: T, h: gy - ry });
+    walls.push({ x: ivx - T / 2, y: gy + gap, w: T, h: ry + rh - (gy + gap) });
+    walls.push({ x: rx, y: ihy - T / 2, w: rw, h: T });
+    door = { x: ivx - T / 2, y: gy, w: T, h: gap };
+  } else {                                    // door on the horizontal inner wall
+    const gx = clamp(rx + rw / 2 - gap / 2, rx + 20, rx + rw - 20 - gap);
+    walls.push({ x: rx, y: ihy - T / 2, w: gx - rx, h: T });
+    walls.push({ x: gx + gap, y: ihy - T / 2, w: rx + rw - (gx + gap), h: T });
+    walls.push({ x: ivx - T / 2, y: ry, w: T, h: rh });
+    door = { x: gx, y: ihy - T / 2, w: gap, h: T };
+  }
+  return { room, door, corner, center: { x: rx + rw / 2, y: ry + rh / 2 } };
+}
+function generateLayout(map, mods) {
+  for (let attempt = 0; attempt < 14; attempt++) {
+    const walls = OUTER.map((w) => ({ ...w }));
+    const bossInfo = map.boss ? carveBossRoom(walls) : null;
+    const bossRoom = bossInfo ? bossInfo.room : null;
+
+    const cover = [], nCover = map.coverBase + ((Math.random() * 3) | 0);
+    let tries = 0;
+    while (cover.length < nCover && tries++ < 240) {
+      const ww = [40, 80, 120, 160, 200][(Math.random() * 5) | 0], hh = [40, 80, 120, 160][(Math.random() * 4) | 0];
+      if (ww >= 160 && hh >= 120) continue;
+      const r = { x: 120 + Math.random() * (WORLD.w - 240 - ww), y: 120 + Math.random() * (WORLD.h - 240 - hh), w: ww, h: hh };
+      if (bossRoom && rectsTouch(r, bossRoom, 40)) continue;
+      if (cover.some((c) => rectsTouch(r, c, 50))) continue;
+      cover.push(r);
+    }
+    for (const c of cover) walls.push(c);
+
+    WALL_DATA = walls; buildNav();
+
+    // Avoid the boss room AND its doorway (the gap is open now but gets sealed by the door wall).
+    const avoid = bossRoom ? { x: bossRoom.x - 60, y: bossRoom.y - 60, w: bossRoom.w + 120, h: bossRoom.h + 120 } : null;
+    const corners = [{ x: 130, y: 130 }, { x: WORLD.w - 130, y: 130 }, { x: 130, y: WORLD.h - 130 }, { x: WORLD.w - 130, y: WORLD.h - 130 }];
+    let spawn = bossInfo ? corners[3 - bossInfo.corner] : corners[2];
+    if (inAnyWall(spawn.x, spawn.y, 18)) { const f = randFree(spawn, avoid, 0, 50); if (f) spawn = f; else continue; }
+
+    const extraction = randFree(spawn, avoid, 760, 140);
+    if (!extraction) continue;
+    extraction.r = 55;
+    if (bossInfo && !findPath(spawn.x, spawn.y, bossInfo.center.x, bossInfo.center.y)) continue;
+
+    const nEnemies = Math.max(2, Math.round(map.enemyBase * (mods.enemyMult || 1)));
+    const nLoot = Math.max(3, Math.round(map.lootBase * (mods.lootMult || 1)));
+    const enemies = [], loot = [];
+    for (let i = 0; i < nEnemies; i++) { const p = randFree(spawn, avoid, 280, 40); if (p) enemies.push(p); }
+    for (let i = 0; i < nLoot; i++) { const p = randFree(spawn, avoid, 150, 40); if (p) loot.push(p); }
+    if (enemies.length < Math.max(2, nEnemies - 2) || loot.length < 3) continue;
+
+    let boss = null;
+    if (bossInfo) {
+      const inRoom = () => ({ x: bossInfo.room.x + 60 + Math.random() * (bossInfo.room.w - 120), y: bossInfo.room.y + 60 + Math.random() * (bossInfo.room.h - 120) });
+      boss = { id: map.boss, spawn: bossInfo.center, door: bossInfo.door, guards: [inRoom(), inRoom()], loot: [inRoom(), inRoom()] };
+    }
+    return { walls, spawn, extraction, enemies, loot, boss };
+  }
+  // fallback: open arena (should be rare)
+  WALL_DATA = OUTER.map((w) => ({ ...w })); buildNav();
+  return { walls: WALL_DATA, spawn: { x: 130, y: WORLD.h - 130 }, extraction: { x: WORLD.w - 130, y: 130, r: 55 },
+           enemies: [{ x: 700, y: 300 }, { x: 900, y: 600 }], loot: [{ x: 400, y: 400 }, { x: 800, y: 500 }, { x: 600, y: 700 }], boss: null };
 }
 
 /* ---------- EVENTS / BULLETS ----------------------------------------------- */
@@ -427,7 +495,7 @@ function killEnemy(e) {
   for (let i = 0; i < drops; i++) game.pickups.push({ x: e.x + (Math.random() * 40 - 20), y: e.y + (Math.random() * 40 - 20), item: LOOT.medkit });
 }
 function seesPlayer(e) { const p = game.player; return !p.dead && dist(e.x, e.y, p.x, p.y) <= e.data.sight && losClear(e.x, e.y, p.x, p.y); }
-function moveToward(e, tx, ty, dt) { if (dist(e.x, e.y, tx, ty) < 5) return; const dir = norm(tx - e.x, ty - e.y); tryMove(e, dir.x * e.data.speed * dt, dir.y * e.data.speed * dt); }
+function moveToward(e, tx, ty, dt) { if (dist(e.x, e.y, tx, ty) < 5) return; const dir = norm(tx - e.x, ty - e.y), sp = e.data.speed * (e.speedMult || 1); tryMove(e, dir.x * sp * dt, dir.y * sp * dt); }
 function fireAimed(e, speed, dmg, col, jitter) {
   const p = game.player, ang = Math.atan2(p.y - e.y, p.x - e.x) + (Math.random() * 2 - 1) * (jitter || 0), dir = { x: Math.cos(ang), y: Math.sin(ang) };
   spawnBullet(e.x + dir.x * (e.r + 6), e.y + dir.y * (e.r + 6), dir, speed, dmg, col, false);
@@ -439,7 +507,7 @@ function bossScatter(e) {
 }
 function enemyAttack(e, dt) {
   e.fireCd -= dt; if (e.fireCd > 0) return;
-  if (!e.data.boss) { fireAimed(e, 520, e.data.damage, "#ff7333", 0.05); e.fireCd = 1 / e.data.fireRate; emitNoise(e.x, e.y, 200, e); return; }
+  if (!e.data.boss) { fireAimed(e, 520, e.data.damage, "#ff7333", 0.05); e.fireCd = 1 / (e.data.fireRate * (e.fireMult || 1)); emitNoise(e.x, e.y, 200, e); return; }
   if (e.atk === 0) { bossScatter(e); e.atk = 1; e.fireCd = 1.15; }
   else { e.burst = 4; e.burstT = 0; e.atk = 0; e.fireCd = 1.3; }
 }
@@ -467,7 +535,7 @@ function updateEnemy(e, dt) {
 function endRun(extracted) {
   game.run.result = extracted;
   let reward = 0;
-  if (extracted) { reward = Math.round(game.run.loot * game.map.lootValue); profile.fragments += reward; saveProfile(); }
+  if (extracted) { reward = Math.round(game.run.loot * game.map.lootValue * (game.mods.rewardMult || 1)); profile.fragments += reward; saveProfile(); }
   game.run.reward = reward;
   game.state = "result";
 }
@@ -481,7 +549,7 @@ function updateRun(dt) {
   r.timeLeft -= dt;
   if (r.timeLeft <= 0 && !r.alarm) { r.timeLeft = 0; r.alarm = true; for (const e of game.enemies) if (e.state !== "chase") { e.state = "search"; e.lastKnown = { x: game.player.x, y: game.player.y }; e.searchT = 0; } }
   if (game.hasBoss && game.doorLocked) { const outsideAlive = game.enemies.some((e) => !e.bossRoom); if (!outsideAlive || r.alarm) unlockDoor(); }
-  const p = game.player, ex = game.map.extraction;
+  const p = game.player, ex = game.extraction;
   if (!r.extractDone) {
     if (!p.dead && dist(p.x, p.y, ex.x, ex.y) < ex.r) { r.extractT += dt; if (r.extractT >= 3) { r.extractDone = true; endRun(true); } }
     else r.extractT = 0;
@@ -496,11 +564,15 @@ function computeCamera(p) {
 }
 function update(dt) {
   if (game.state !== "playing") return;
+  const r = game.run;
   updatePlayer(dt);
-  for (const e of game.enemies) updateEnemy(e, dt);
-  game.enemies = game.enemies.filter((e) => !e.dead);
-  updateBullets(dt);
-  updateRun(dt);
+  if (!r.started) { const md = getMoveDir(); if (md.moving || mouseDown || touch.aimActive || game.player.dodging) r.started = true; }
+  if (r.started) {                              // enemies + timer stay frozen until the player acts
+    for (const e of game.enemies) updateEnemy(e, dt);
+    game.enemies = game.enemies.filter((e) => !e.dead);
+    updateBullets(dt);
+    updateRun(dt);
+  }
   for (const f of game.noiseFlashes) f.life -= dt;
   game.noiseFlashes = game.noiseFlashes.filter((f) => f.life > 0);
   for (const s of game.sparks) s.life -= dt;
@@ -526,7 +598,7 @@ function draw() {
   for (let gx = 0; gx <= WORLD.w; gx += 80) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, WORLD.h); ctx.stroke(); }
   for (let gy = 0; gy <= WORLD.h; gy += 80) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(WORLD.w, gy); ctx.stroke(); }
 
-  const ex = map.extraction;
+  const ex = game.extraction;
   ctx.fillStyle = "rgba(50,200,110,0.18)"; ctx.beginPath(); ctx.arc(ex.x, ex.y, ex.r, 0, Math.PI * 2); ctx.fill();
   ctx.strokeStyle = "rgba(80,255,140,0.7)"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(ex.x, ex.y, ex.r, 0, Math.PI * 2); ctx.stroke();
   if (game.run.extractT > 0 && !game.run.extractDone) { const frac = clamp(game.run.extractT / 3, 0, 1); ctx.strokeStyle = "#5dff8c"; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(ex.x, ex.y, ex.r + 6, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac); ctx.stroke(); }
@@ -587,6 +659,13 @@ function drawHUD() {
   if (!isTouch) { ctx.fillStyle = "rgba(255,255,255,0.55)"; ctx.font = "13px system-ui"; ctx.fillText("WASD move · Shift sprint · Space dodge · Mouse aim · LMB fire · R reload", 16, CH - 18); }
   if (game.announceT > 0) { ctx.textAlign = "center"; ctx.fillStyle = "rgba(255,220,120," + clamp(game.announceT, 0, 1).toFixed(2) + ")"; ctx.font = "bold 30px system-ui"; ctx.fillText(game.announce, CW / 2, 92); ctx.textAlign = "left"; }
 
+  if (game.state === "playing" && !r.started) {
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#fff"; ctx.font = "bold 34px system-ui"; ctx.fillText("MOVE TO BEGIN", CW / 2, CH / 2 - 10);
+    ctx.fillStyle = "rgba(255,255,255,0.6)"; ctx.font = "16px system-ui"; ctx.fillText("Enemies and the timer are frozen until you act.", CW / 2, CH / 2 + 22);
+    ctx.textAlign = "left";
+  }
+
   if (game.state === "result") {
     ctx.fillStyle = "rgba(0,0,0,0.72)"; ctx.fillRect(0, 0, CW, CH); ctx.textAlign = "center";
     ctx.fillStyle = r.result ? "#5dff8c" : "#ff6b6b"; ctx.font = "bold 52px system-ui";
@@ -626,43 +705,61 @@ function card(r) { ctx.fillStyle = "rgba(255,255,255,0.06)"; ctx.fillRect(r.x, r
 function drawHub() {
   hubButtons = [];
   ctx.fillStyle = "#0c0c12"; ctx.fillRect(0, 0, CW, CH);
-  ctx.textAlign = "left"; ctx.fillStyle = "#fff"; ctx.font = "bold 30px system-ui"; ctx.fillText("ECHO VAULTS — HUB", 24, 44);
-  ctx.fillStyle = "#ffd86b"; ctx.font = "20px system-ui"; ctx.fillText("Echo Fragments: " + profile.fragments, 24, 74);
+  ctx.textAlign = "left"; ctx.fillStyle = "#fff"; ctx.font = "bold 28px system-ui"; ctx.fillText("ECHO VAULTS — HUB", 24, 40);
+  ctx.fillStyle = "#ffd86b"; ctx.font = "20px system-ui"; ctx.fillText("Echo Fragments: " + profile.fragments, 24, 68);
+
+  // run-modifier chips
+  ctx.fillStyle = "#9fd0ff"; ctx.font = "bold 14px system-ui"; ctx.fillText("RUN MODIFIER", 24, 92);
+  const chipW = 152, chipH = 36, gap = 8; let chx = 24, chy = 100;
+  for (let i = 0; i < MODIFIERS.length; i++) {
+    if (chx + chipW > CW - 20) { chx = 24; chy += chipH + gap; }
+    const sel = i === selectedMod, mod = MODIFIERS[i];
+    ctx.fillStyle = sel ? "#3a5d8f" : "rgba(255,255,255,0.06)"; ctx.fillRect(chx, chy, chipW, chipH);
+    ctx.strokeStyle = sel ? "#9fd0ff" : "rgba(255,255,255,0.18)"; ctx.lineWidth = sel ? 2 : 1; ctx.strokeRect(chx, chy, chipW, chipH);
+    ctx.fillStyle = "#fff"; ctx.font = "13px system-ui"; ctx.textAlign = "center";
+    ctx.fillText(mod.name + (mod.rewardMult !== 1 ? "  x" + mod.rewardMult : ""), chx + chipW / 2, chy + 16);
+    ctx.fillStyle = "rgba(255,255,255,0.5)"; ctx.font = "10px system-ui"; ctx.fillText(mod.desc, chx + chipW / 2, chy + 30);
+    ctx.textAlign = "left";
+    hubButtons.push({ x: chx, y: chy, w: chipW, h: chipH, action: ((idx) => () => { selectedMod = idx; })(i) });
+    chx += chipW + gap;
+  }
+  const rewardMult = MODIFIERS[selectedMod].rewardMult || 1;
+  const topY = chy + chipH + 18;
 
   const twoCol = CW >= 820;
   const colW = twoCol ? (CW - 72) / 2 : CW - 48;
   const leftX = 24, rightX = twoCol ? 48 + colW : 24;
 
-  let lY = 100;
+  let lY = topY;
   ctx.fillStyle = "#9fd0ff"; ctx.font = "bold 17px system-ui"; ctx.fillText("SELECT VAULT", leftX, lY); lY += 14;
   for (const m of MAPS) {
-    const rect = { x: leftX, y: lY, w: colW, h: 78 }; card(rect);
-    ctx.fillStyle = "#fff"; ctx.font = "bold 18px system-ui"; ctx.fillText(m.name, rect.x + 14, rect.y + 26);
+    const rect = { x: leftX, y: lY, w: colW, h: 76 }; card(rect);
+    ctx.fillStyle = "#fff"; ctx.font = "bold 18px system-ui"; ctx.fillText(m.name, rect.x + 14, rect.y + 25);
     ctx.fillStyle = "#bbb"; ctx.font = "13px system-ui";
-    ctx.fillText("Difficulty " + "★".repeat(m.difficulty) + (m.boss ? "    ·    BOSS" : "    ·    no boss"), rect.x + 14, rect.y + 48);
-    ctx.fillStyle = "#7fd6a0"; ctx.fillText("Reward x" + m.lootValue + " / loot   ·   " + Math.round(m.raidTime) + "s", rect.x + 14, rect.y + 68);
-    ctx.fillStyle = "#6fb8ff"; ctx.font = "bold 16px system-ui"; ctx.textAlign = "right"; ctx.fillText("PLAY ▶", rect.x + rect.w - 16, rect.y + 44); ctx.textAlign = "left";
-    hubButtons.push({ x: rect.x, y: rect.y, w: rect.w, h: rect.h, action: () => startRaid(m) });
-    lY += 90;
+    ctx.fillText("Difficulty " + "★".repeat(m.difficulty) + (m.boss ? "    ·    BOSS" : "    ·    no boss"), rect.x + 14, rect.y + 46);
+    ctx.fillStyle = "#7fd6a0"; ctx.fillText("Reward x" + Math.round(m.lootValue * rewardMult) + " / loot   ·   " + Math.round(m.raidTime) + "s", rect.x + 14, rect.y + 66);
+    ctx.fillStyle = "#6fb8ff"; ctx.font = "bold 16px system-ui"; ctx.textAlign = "right"; ctx.fillText("PLAY ▶", rect.x + rect.w - 16, rect.y + 42); ctx.textAlign = "left";
+    hubButtons.push({ x: rect.x, y: rect.y, w: rect.w, h: rect.h, action: ((mm) => () => startRaid(mm))(m) });
+    lY += 86;
   }
 
-  let uY = twoCol ? 100 : lY + 10;
+  let uY = twoCol ? topY : lY + 10;
   const uX = twoCol ? rightX : leftX;
   ctx.fillStyle = "#9fd0ff"; ctx.font = "bold 17px system-ui"; ctx.fillText("UPGRADES (permanent)", uX, uY); uY += 14;
   for (const s of UPGRADES) {
-    const rect = { x: uX, y: uY, w: colW, h: 60 }; card(rect);
+    const rect = { x: uX, y: uY, w: colW, h: 58 }; card(rect);
     const lvl = upgradeLevel(s.id), cost = upgradeCost(s);
-    ctx.fillStyle = "#fff"; ctx.font = "bold 15px system-ui"; ctx.fillText(s.name + "  [" + lvl + "/" + s.max + "]", rect.x + 12, rect.y + 23);
-    ctx.fillStyle = "#bbb"; ctx.font = "12px system-ui"; ctx.fillText(s.desc, rect.x + 12, rect.y + 44);
-    const btn = { x: rect.x + rect.w - 114, y: rect.y + 12, w: 102, h: 36 };
+    ctx.fillStyle = "#fff"; ctx.font = "bold 15px system-ui"; ctx.fillText(s.name + "  [" + lvl + "/" + s.max + "]", rect.x + 12, rect.y + 22);
+    ctx.fillStyle = "#bbb"; ctx.font = "12px system-ui"; ctx.fillText(s.desc, rect.x + 12, rect.y + 43);
+    const btn = { x: rect.x + rect.w - 114, y: rect.y + 11, w: 102, h: 36 };
     const afford = cost != null && profile.fragments >= cost;
     ctx.fillStyle = cost == null ? "#3a3a44" : (afford ? "#2e7d4f" : "#5a2e2e"); ctx.fillRect(btn.x, btn.y, btn.w, btn.h);
     ctx.fillStyle = "#fff"; ctx.font = "13px system-ui"; ctx.textAlign = "center"; ctx.fillText(cost == null ? "MAX" : ("Buy  " + cost), btn.x + btn.w / 2, btn.y + 23); ctx.textAlign = "left";
-    if (cost != null) hubButtons.push({ x: btn.x, y: btn.y, w: btn.w, h: btn.h, action: () => buyUpgrade(s) });
-    uY += 68;
+    if (cost != null) hubButtons.push({ x: btn.x, y: btn.y, w: btn.w, h: btn.h, action: ((ss) => () => buyUpgrade(ss))(s) });
+    uY += 64;
   }
   ctx.fillStyle = "rgba(255,255,255,0.5)"; ctx.font = "12px system-ui";
-  ctx.fillText("Pick a vault to deploy. Extract to bank Fragments; die and this run's loot is lost.", 24, CH - 14);
+  ctx.fillText("Pick a vault to deploy. Layouts are generated fresh each raid.", 24, CH - 12);
 }
 
 /* ---------- BOOT ----------------------------------------------------------- */
@@ -680,7 +777,8 @@ requestAnimationFrame(loop);
 /* ---------- test hook (no-op in the browser) ------------------------------- */
 if (typeof module !== "undefined") {
   module.exports = { get game() { return game; }, get profile() { return profile; }, update, draw, startRaid, returnToHub,
-                     keys, MAPS, UPGRADES, buyUpgrade, upgradeCost, handleHubClick, get hubButtons() { return hubButtons; },
+                     keys, MAPS, MODIFIERS, UPGRADES, buyUpgrade, upgradeCost, generateLayout, computeMods, handleHubClick,
+                     get hubButtons() { return hubButtons; }, get selectedMod() { return selectedMod; }, setMod: (i) => { selectedMod = i; },
                      setMouse: (v) => { mouseDown = v; }, onTouchStart, onTouchMove, onTouchEnd, touch, buttons,
                      getMoveDir, getAim, isTouch, findPath, navCell, NAV, get WALL() { return WALL_DATA; } };
 }
